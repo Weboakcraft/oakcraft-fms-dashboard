@@ -1,0 +1,1258 @@
+<script>
+/* ============================================================================
+ *  OakCraft FMS Dashboard — client application
+ *  NOTE: the browser is never trusted. Everything shown here was already
+ *  scoped by the server for the signed-in user; admin screens are also
+ *  re-authorised on the server for every call.
+ * ========================================================================== */
+(function () {
+  'use strict';
+
+  /* ------------------------------------------------------------------ state */
+  const S = {
+    token: null, user: null, settings: { syncSeconds: 120, passwordMinLength: 8 },
+    data: null, version: null, lastSync: 0, syncing: false, syncTimer: null, tickTimer: null,
+    route: 'overview', spFilter: '',
+    tables: {},
+    admin: { users: null, salespersons: [], userQ: '', userRole: '', userStatus: '', activity: null, actLogin: '', actEvent: '' }
+  };
+  const TOKEN_KEY = 'fms.session';
+
+  /* ------------------------------------------------------------- helpers */
+  const $ = (sel, root) => (root || document).querySelector(sel);
+  const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+  const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' };
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"'`]/g, (c) => ESC[c]);
+  const fmtN = (n) => Number(n || 0).toLocaleString('en-IN');
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+  const initials = (s) => String(s || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
+  const titleCase = (s) => String(s || '').toLowerCase().replace(/\b([a-z])/g, (m) => m.toUpperCase());
+  const isStaff = () => S.user && (S.user.role === 'admin' || S.user.role === 'manager');
+  const isAdmin = () => S.user && S.user.role === 'admin';
+
+  const store = {
+    get(k) { try { return window.sessionStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { window.sessionStorage.setItem(k, v); } catch (e) { /* memory only */ } },
+    del(k) { try { window.sessionStorage.removeItem(k); } catch (e) { /* ignore */ } }
+  };
+  const pref = {
+    get(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { window.localStorage.setItem(k, v); } catch (e) { /* ignore */ } }
+  };
+
+  function timeAgo(iso) {
+    const t = typeof iso === 'number' ? iso : Date.parse(iso || '');
+    if (!t) return '—';
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 45) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' h ago';
+    if (s < 86400 * 30) return Math.round(s / 86400) + ' d ago';
+    return new Date(t).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+  function fmtDateTime(iso) {
+    const t = Date.parse(iso || '');
+    if (!t) return '—';
+    return new Date(t).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  function addDays(isoDate, n) {
+    const d = new Date(isoDate + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().substring(0, 10);
+  }
+  function monthLabel(ym) {
+    const [y, m] = ym.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-IN', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+  }
+  function safeUrl(u) { return /^https:\/\//i.test(String(u || '')) ? String(u) : ''; }
+  function thumbUrl(u, size) {
+    u = safeUrl(u);
+    if (!u) return '';
+    return /drive\.google\.com\/thumbnail/.test(u) ? u.replace(/([?&])sz=w\d+/, '$1sz=w' + size) : u;
+  }
+
+  /* ---------------------------------------------------------- icons (svg) */
+  const I = {
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
+    truck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h11v10H3zM14 9h4l3 3v4h-7"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>',
+    cart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h2l2.4 11.2a2 2 0 0 0 2 1.6h7.7a2 2 0 0 0 2-1.5L21 8H6.2"/><circle cx="10" cy="20" r="1.3"/><circle cx="17" cy="20" r="1.3"/></svg>',
+    users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.2A6.5 6.5 0 0 1 21.5 20"/></svg>',
+    activity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>',
+    shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>',
+    box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>',
+    layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></svg>',
+    clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>',
+    alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17.5v.01"/></svg>',
+    cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
+    search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+    download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>',
+    x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+    image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>',
+    user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
+    globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
+    more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
+    inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M5 5h14l2 8v6H3v-6z"/></svg>'
+  };
+
+  /* --------------------------------------------------------- status model */
+  const STATUS = {
+    'DELIVERED TO CUSTOMER': { tone: 'good', rank: 6 },
+    'ORDER DISPATCH FROM FACTORY': { tone: 'aqua', rank: 5 },
+    'READY FOR DISPATCH': { tone: 'info', rank: 4 },
+    'ORDER IN PROCESS': { tone: 'warn', rank: 3 },
+    'PENDING FROM CUSTOMER': { tone: 'serious', rank: 2 },
+    'ORDER CANCELLED': { tone: 'critical', rank: 7 },
+    'NOT UPDATED': { tone: 'neutral', rank: 1 }
+  };
+  const statusMeta = (s) => STATUS[String(s || '').toUpperCase()] || { tone: 'violet', rank: 0 };
+  const toneVar = (t) => 'var(--' + ({ info: 'info', aqua: 'aqua', good: 'good', warn: 'warn', serious: 'serious', critical: 'critical', neutral: 'neutral', violet: 'violet' }[t] || 'neutral') + ')';
+  const pill = (s) => '<span class="pill st-' + statusMeta(s).tone + '"><span class="dot"></span>' + esc(s) + '</span>';
+  const isOpen = (r) => !r.isDone && !r.isCancelled;
+
+  /* ------------------------------------------------------------------ API */
+  function call(action, payload) {
+    return new Promise((resolve, reject) => {
+      if (!window.google || !google.script || !google.script.run) {
+        reject({ code: 'NETWORK', error: 'Server connection is unavailable.' });
+        return;
+      }
+      google.script.run
+        .withSuccessHandler((raw) => {
+          let res;
+          try { res = JSON.parse(raw); } catch (e) { reject({ code: 'BAD_RESPONSE', error: 'Unexpected server response.' }); return; }
+          if (res.ok) resolve(res.data); else reject(res);
+        })
+        .withFailureHandler((err) => reject({ code: 'NETWORK', error: (err && err.message) || 'Network error. Please check your connection.' }))
+        .api(JSON.stringify({ action: action, token: S.token, payload: payload || {} }));
+    });
+  }
+
+  function handleError(err, opts) {
+    opts = opts || {};
+    const code = err && err.code;
+    if (code === 'AUTH_REQUIRED') { endSession(err.error || 'Please sign in again.'); return; }
+    if (code === 'PASSWORD_CHANGE_REQUIRED') { showView('change'); return; }
+    if (!opts.silent) toast((err && err.error) || 'Something went wrong.', 'error');
+  }
+
+  /* --------------------------------------------------------------- toasts */
+  function toast(msg, type) {
+    const el = document.createElement('div');
+    el.className = 'toast ' + (type || '');
+    el.textContent = msg;
+    $('#toasts').appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, 3800);
+    setTimeout(() => el.remove(), 4200);
+  }
+
+  /* ------------------------------------------------------------- tooltip */
+  function initTooltip() {
+    const tip = $('#tooltip');
+    document.addEventListener('mouseover', (e) => {
+      const t = e.target.closest('[data-tip]');
+      if (!t) { tip.hidden = true; return; }
+      tip.textContent = t.getAttribute('data-tip');
+      tip.style.whiteSpace = 'pre-line';
+      tip.hidden = false;
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (tip.hidden) return;
+      const w = tip.offsetWidth, h = tip.offsetHeight;
+      let x = e.clientX + 14, y = e.clientY + 14;
+      if (x + w > window.innerWidth - 8) x = e.clientX - w - 14;
+      if (y + h > window.innerHeight - 8) y = e.clientY - h - 14;
+      tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    });
+    document.addEventListener('scroll', () => { tip.hidden = true; }, true);
+  }
+
+  /* --------------------------------------------------------------- views */
+  function showView(name) {
+    $('#boot').hidden = true;
+    $('#view-login').hidden = name !== 'login';
+    $('#view-change').hidden = name !== 'change';
+    $('#view-app').hidden = name !== 'app';
+    if (name === 'login') setTimeout(() => $('#login-id').focus(), 50);
+    if (name === 'change') { $('#change-form').reset(); $('#change-alert').hidden = true; updateMeter(''); setTimeout(() => $('#cp-current').focus(), 50); }
+  }
+
+  function setAlert(el, msg, type) {
+    el.className = 'alert ' + (type || 'error');
+    el.textContent = msg;
+    el.hidden = !msg;
+  }
+
+  function setBusy(btn, busy, label) {
+    if (busy) {
+      btn.dataset.label = btn.innerHTML;
+      btn.innerHTML = '<span class="spin"></span>' + esc(label || 'Please wait…');
+      btn.disabled = true;
+    } else {
+      if (btn.dataset.label) btn.innerHTML = btn.dataset.label;
+      btn.disabled = false;
+    }
+  }
+
+  /* ---------------------------------------------------------------- auth */
+  function initAuth() {
+    $('#yr').textContent = new Date().getFullYear();
+    $('#login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = $('#login-id').value.trim();
+      const pw = $('#login-pw').value;
+      const alertEl = $('#login-alert');
+      if (!id || !pw) { setAlert(alertEl, 'Please enter your login ID and password.'); return; }
+      const btn = $('#login-btn');
+      setBusy(btn, true, 'Signing in…');
+      setAlert(alertEl, '');
+      try {
+        const res = await call('login', { loginId: id, password: pw });
+        $('#login-pw').value = '';
+        startSession(res);
+      } catch (err) {
+        setAlert(alertEl, (err && err.error) || 'Sign-in failed.');
+        $('#login-pw').value = '';
+        $('#login-pw').focus();
+      } finally {
+        setBusy(btn, false);
+      }
+    });
+
+    $('#cp-new').addEventListener('input', (e) => updateMeter(e.target.value));
+    $('#change-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const alertEl = $('#change-alert');
+      const cur = $('#cp-current').value, nw = $('#cp-new').value, cf = $('#cp-confirm').value;
+      const problem = pwProblem(nw, cf);
+      if (!cur) { setAlert(alertEl, 'Enter your current password.'); return; }
+      if (problem) { setAlert(alertEl, problem); return; }
+      const btn = $('#cp-btn');
+      setBusy(btn, true, 'Updating…');
+      try {
+        const res = await call('changePassword', { currentPassword: cur, newPassword: nw });
+        S.token = res.token; store.set(TOKEN_KEY, res.token); S.user = res.user;
+        toast('Password updated.', 'success');
+        enterApp();
+      } catch (err) {
+        if (err && err.code === 'AUTH_REQUIRED') { handleError(err); return; }
+        setAlert(alertEl, (err && err.error) || 'Could not update password.');
+      } finally { setBusy(btn, false); }
+    });
+
+    $$('[data-toggle-pw]').forEach((b) => b.addEventListener('click', () => {
+      const inp = document.getElementById(b.getAttribute('data-toggle-pw'));
+      const show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      b.textContent = show ? 'Hide' : 'Show';
+    }));
+  }
+
+  function pwProblem(nw, cf) {
+    const min = S.settings.passwordMinLength || 8;
+    if (nw.length < min) return 'The new password must be at least ' + min + ' characters.';
+    if (!/[A-Za-z]/.test(nw) || !/[0-9]/.test(nw)) return 'The new password must contain a letter and a number.';
+    if (cf != null && nw !== cf) return 'The two new passwords do not match.';
+    return '';
+  }
+  function updateMeter(pw) {
+    let score = 0;
+    if (pw.length >= 8) score++;
+    if (pw.length >= 12) score++;
+    if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
+    if (/[0-9]/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+    const bar = $('#pw-meter-bar');
+    bar.style.width = (score / 5) * 100 + '%';
+    bar.style.background = score <= 2 ? 'var(--critical)' : score === 3 ? 'var(--warn)' : 'var(--good)';
+  }
+
+  function startSession(res) {
+    S.token = res.token; store.set(TOKEN_KEY, res.token);
+    S.user = res.user; S.settings = Object.assign(S.settings, res.settings || {});
+    if (S.user.mustChange) showView('change'); else enterApp();
+  }
+
+  async function logout() {
+    try { await call('logout'); } catch (e) { /* ignore */ }
+    endSession('You have been signed out.', 'success');
+  }
+
+  function endSession(msg, type) {
+    stopSync();
+    S.token = null; S.user = null; S.data = null; S.version = null; S.tables = {}; S.spFilter = '';
+    S.admin = { users: null, salespersons: [], userQ: '', userRole: '', userStatus: '', activity: null, actLogin: '', actEvent: '' };
+    store.del(TOKEN_KEY);
+    closeModal(); closeDrawer();
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { location.hash = ''; }
+    $('#content').innerHTML = '';
+    showView('login');
+    if (msg) setAlert($('#login-alert'), msg, type || 'info');
+  }
+
+  /* ------------------------------------------------------------ app shell */
+  function enterApp() {
+    showView('app');
+    const u = S.user;
+    $('#side-avatar').textContent = initials(u.displayName);
+    $('#top-avatar').textContent = initials(u.displayName);
+    $('#side-name').textContent = u.displayName;
+    $('#top-name').textContent = u.displayName.split(' ')[0];
+    $('#side-role').textContent = u.role === 'salesperson' ? titleCase(u.salesperson) : u.role;
+    $('#menu-name').textContent = u.displayName;
+    $('#menu-sub').textContent = '@' + u.loginId + ' · ' + u.role;
+    buildNav();
+    const fromHash = (location.hash || '').replace(/^#\/?/, '');
+    S.route = routeAllowed(fromHash) ? fromHash : 'overview';
+    renderRoute();
+    syncNow(true);
+    startSync();
+  }
+
+  function navItems() {
+    const p = S.user.permissions || {};
+    const items = [{ id: 'overview', label: 'Overview', icon: I.home }];
+    if (p.o2d !== false) items.push({ id: 'o2d', label: 'O2D Orders', icon: I.truck, badge: 'o2d' });
+    if (p.tbo !== false) items.push({ id: 'tbo', label: 'To Be Ordered', icon: I.cart, badge: 'tbo' });
+    if (isAdmin()) {
+      items.push({ section: 'Administration' });
+      items.push({ id: 'users', label: 'Users & Access', icon: I.users });
+      items.push({ id: 'activity', label: 'Activity Log', icon: I.activity });
+      items.push({ id: 'system', label: 'System & Security', icon: I.shield });
+    }
+    return items;
+  }
+  function routeAllowed(r) { return navItems().some((i) => i.id === r); }
+
+  function buildNav() {
+    $('#nav').innerHTML = navItems().map((i) => i.section
+      ? '<div class="nav-section">' + esc(i.section) + '</div>'
+      : '<a href="#/' + i.id + '" data-route="' + i.id + '">' + i.icon + '<span>' + esc(i.label) + '</span>' +
+        (i.badge ? '<span class="badge" data-badge="' + i.badge + '"></span>' : '') + '</a>').join('');
+    updateNavBadges();
+  }
+  function updateNavBadges() {
+    $$('[data-badge]').forEach((b) => {
+      const key = b.getAttribute('data-badge');
+      const src = S.data && S.data.sources[key];
+      if (!src) { b.textContent = ''; return; }
+      const rows = scopedRows(key);
+      const overdue = rows.filter((r) => r.isOverdue).length;
+      b.textContent = overdue ? overdue + ' late' : fmtN(rows.length);
+      b.classList.toggle('alert-badge', overdue > 0);
+      b.setAttribute('data-tip', overdue ? overdue + ' overdue item(s)' : rows.length + ' items');
+    });
+  }
+
+  function go(route) {
+    if (!routeAllowed(route)) route = 'overview';
+    if (location.hash !== '#/' + route) location.hash = '#/' + route;
+    else { S.route = route; renderRoute(); }
+  }
+
+  function renderRoute() {
+    $$('#nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('data-route') === S.route));
+    $('#view-app').classList.remove('nav-open');
+    const c = $('#content');
+    const titles = {
+      overview: ['Overview', isStaff() ? 'Business-wide fulfilment snapshot' : 'Your fulfilment snapshot'],
+      o2d: ['O2D Orders', 'Order-to-delivery pipeline'],
+      tbo: ['To Be Ordered', 'Items to be procured for customer orders'],
+      users: ['Users & Access', 'Create accounts, map salespersons and control access'],
+      activity: ['Activity Log', 'Sign-ins, data access and administrative actions'],
+      system: ['System & Security', 'Configuration, sessions and maintenance']
+    };
+    const t = titles[S.route] || titles.overview;
+    $('#page-title').textContent = t[0];
+    $('#page-sub').textContent = t[1];
+    if (S.route === 'users') return renderUsers(c);
+    if (S.route === 'activity') return renderActivity(c);
+    if (S.route === 'system') return renderSystem(c);
+    if (!S.data) { c.innerHTML = skeleton(); return; }
+    if (S.route === 'o2d' || S.route === 'tbo') return renderTable(c, S.route);
+    return renderOverview(c);
+  }
+
+  function skeleton() {
+    return '<div class="kpis">' + Array(6).fill('<div class="kpi"><div class="skeleton" style="height:14px;width:60%"></div><div class="skeleton" style="height:28px;width:45%"></div><div class="skeleton" style="height:10px;width:70%"></div></div>').join('') + '</div>' +
+      '<div class="panel"><div class="panel-body"><div class="skeleton" style="height:220px"></div></div></div>';
+  }
+
+  /* ----------------------------------------------------------------- sync */
+  async function syncNow(initial) {
+    if (S.syncing || !S.token) return;
+    S.syncing = true;
+    setSync('busy', 'Syncing…');
+    $('#refresh-btn').classList.add('spinning');
+    try {
+      const res = await call('getData', { since: initial ? '' : (S.version || '') });
+      S.lastSync = Date.now();
+      if (res.unchanged) {
+        S.data.syncedAt = res.syncedAt;
+      } else {
+        prepareData(res);
+        S.data = res; S.version = res.version;
+        if (S.spFilter && (!res.salespersons || res.salespersons.indexOf(S.spFilter) < 0)) S.spFilter = '';
+        updateNavBadges();
+        if (['overview', 'o2d', 'tbo'].indexOf(S.route) >= 0) renderRoute();
+      }
+      setSync('ok', 'Synced ' + timeAgo(S.lastSync));
+    } catch (err) {
+      setSync('err', 'Sync failed');
+      handleError(err, { silent: !initial });
+    } finally {
+      S.syncing = false;
+      $('#refresh-btn').classList.remove('spinning');
+    }
+  }
+  function prepareData(d) {
+    Object.keys(d.sources).forEach((k) => {
+      d.sources[k].rows.forEach((r, i) => {
+        r._src = k; r._i = i;
+        r._q = [r.orderId, r.customer, r.contact, r.city, r.item, r.orderType, r.productType, r.transport, r.salesperson, r.status].join(' ').toLowerCase();
+      });
+    });
+  }
+  function setSync(state, text) {
+    const el = $('#sync');
+    el.classList.toggle('busy', state === 'busy');
+    el.classList.toggle('err', state === 'err');
+    $('#sync-text').textContent = text;
+    el.setAttribute('data-tip', S.data ? 'Sheet data as of ' + fmtDateTime(S.data.syncedAt) + '\nAuto-refresh every ' + Math.round(S.settings.syncSeconds / 60) + ' min' : 'Loading data');
+  }
+  function startSync() {
+    stopSync();
+    S.syncTimer = setInterval(() => { if (!document.hidden) syncNow(false); }, Math.max(30, S.settings.syncSeconds) * 1000);
+    S.tickTimer = setInterval(() => { if (S.lastSync && !S.syncing) setSync('ok', 'Synced ' + timeAgo(S.lastSync)); }, 30000);
+  }
+  function stopSync() { clearInterval(S.syncTimer); clearInterval(S.tickTimer); S.syncTimer = S.tickTimer = null; }
+
+  /* ----------------------------------------------------------- data utils */
+  function scopedRows(key) {
+    const src = S.data && S.data.sources[key];
+    if (!src) return [];
+    if (!S.spFilter) return src.rows;
+    const f = S.spFilter.toUpperCase();
+    return src.rows.filter((r) => String(r.salesperson).replace(/\s+/g, ' ').trim().toUpperCase() === f);
+  }
+  function allScopedRows() {
+    return Object.keys(S.data.sources).reduce((a, k) => a.concat(scopedRows(k)), []);
+  }
+  function uniqueOrders(rows) { const s = new Set(); rows.forEach((r) => r.orderId && s.add(r._src + '|' + r.orderId)); return s.size; }
+  function sumQty(rows) { return rows.reduce((a, r) => a + (Number(r.qty) || 0), 0); }
+  const today = () => (S.data && S.data.today) || new Date().toISOString().substring(0, 10);
+  function isDueSoon(r) { const p = (r.promiseDateIso || '').substring(0, 10); return isOpen(r) && p && p >= today() && p <= addDays(today(), 7); }
+
+  /* ------------------------------------------------------------ scope bar */
+  function scopeBar() {
+    if (!isStaff()) {
+      return '<div class="scope-bar"><div class="scope-ico">' + I.user + '</div><div class="scope-text">Showing orders for <b>' + esc(S.user.salesperson || S.user.displayName) +
+        '</b><div class="tiny muted">Data is filtered on the server — only your orders are ever sent to this device.</div></div></div>';
+    }
+    const opts = ['<option value="">All salespersons</option>'].concat((S.data.salespersons || []).map((n) =>
+      '<option value="' + esc(n) + '"' + (n === S.spFilter ? ' selected' : '') + '>' + esc(titleCase(n)) + '</option>')).join('');
+    return '<div class="scope-bar"><div class="scope-ico">' + I.globe + '</div><div class="scope-text">' +
+      (S.spFilter ? 'Viewing <b>' + esc(titleCase(S.spFilter)) + '</b>' : 'Viewing <b>all salespersons</b>') +
+      '<div class="tiny muted">' + (isAdmin() ? 'Administrator' : 'Manager') + ' view · both FMS sheets</div></div>' +
+      '<select id="sp-filter" aria-label="Filter by salesperson">' + opts + '</select></div>';
+  }
+  function bindScopeBar(root) {
+    const sel = $('#sp-filter', root);
+    if (sel) sel.addEventListener('change', () => { S.spFilter = sel.value; Object.values(S.tables).forEach((t) => { t.page = 1; }); updateNavBadges(); renderRoute(); });
+  }
+
+  /* ------------------------------------------------------------- overview */
+  function renderOverview(c) {
+    const rows = allScopedRows();
+    const o2d = scopedRows('o2d'), tbo = scopedRows('tbo');
+    const hasO2d = !!S.data.sources.o2d, hasTbo = !!S.data.sources.tbo;
+    const open = rows.filter(isOpen), done = rows.filter((r) => r.isDone), late = rows.filter((r) => r.isOverdue), soon = rows.filter(isDueSoon);
+    const cancelled = rows.filter((r) => r.isCancelled);
+    const split = (fn) => [hasO2d ? 'O2D ' + fmtN(fn(o2d)) : '', hasTbo ? 'TBO ' + fmtN(fn(tbo)) : ''].filter(Boolean).join(' · ');
+
+    const kpis = [
+      { label: 'Total Orders', value: fmtN(uniqueOrders(rows)), sub: fmtN(rows.length) + ' line items', icon: I.box, tone: 'accent' },
+      { label: 'Units Ordered', value: fmtN(sumQty(rows)), sub: split(sumQty), icon: I.layers, tone: 'data' },
+      { label: 'Open Items', value: fmtN(open.length), sub: fmtN(sumQty(open)) + ' units in progress', icon: I.clock, tone: 'warn', go: 'open' },
+      { label: 'Delivered', value: fmtN(done.length), sub: pct(done.length, rows.length) + '% of all items', icon: I.check, tone: 'good', go: 'delivered' },
+      { label: 'Overdue', value: fmtN(late.length), sub: 'Past promise date', icon: I.alert, tone: 'critical', hot: late.length > 0, go: 'overdue' },
+      { label: 'Due in 7 Days', value: fmtN(soon.length), sub: cancelled.length ? fmtN(cancelled.length) + ' cancelled overall' : 'Upcoming promise dates', icon: I.cal, tone: 'neutral', go: 'soon' }
+    ];
+
+    // status distribution
+    const byStatus = {};
+    rows.forEach((r) => { byStatus[r.status] = (byStatus[r.status] || 0) + 1; });
+    const statuses = Object.keys(byStatus).sort((a, b) => statusMeta(a).rank - statusMeta(b).rank);
+    const maxS = Math.max(1, ...statuses.map((s) => byStatus[s]));
+
+    // monthly trend (unique orders by order month, last 6 months)
+    const months = [];
+    const t = today();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(Date.UTC(Number(t.substring(0, 4)), Number(t.substring(5, 7)) - 1 - i, 1));
+      months.push(d.toISOString().substring(0, 7));
+    }
+    const mSets = {}; const mQty = {};
+    rows.forEach((r) => {
+      const m = (r.timestampIso || '').substring(0, 7);
+      if (months.indexOf(m) < 0) return;
+      (mSets[m] = mSets[m] || new Set()).add(r._src + '|' + r.orderId);
+      mQty[m] = (mQty[m] || 0) + (Number(r.qty) || 0);
+    });
+    const mVals = months.map((m) => (mSets[m] ? mSets[m].size : 0));
+    const maxM = Math.max(1, ...mVals);
+
+    const lateTop = late.slice().sort((a, b) => b.daysLate - a.daysLate).slice(0, 7);
+    const soonTop = soon.slice().sort((a, b) => (a.promiseDateIso > b.promiseDateIso ? 1 : -1)).slice(0, 7);
+
+    let html = scopeBar();
+    html += '<div class="kpis">' + kpis.map((k) =>
+      '<div class="kpi tone-' + k.tone + (k.go ? ' clickable' : '') + '"' + (k.go ? ' data-kpi="' + k.go + '" role="button" tabindex="0"' : '') + '>' +
+      '<div class="kpi-label"><span class="kpi-ico">' + k.icon + '</span>' + esc(k.label) + '</div>' +
+      '<div class="kpi-value num' + (k.hot ? ' hot' : '') + '">' + k.value + '</div><div class="kpi-sub">' + esc(k.sub) + '</div></div>').join('') + '</div>';
+
+    html += '<div class="grid-2">';
+    html += '<div class="panel"><div class="panel-head"><div><h3>Status breakdown</h3><div class="sub">Line items by current FMS status</div></div></div><div class="panel-body">' +
+      (statuses.length ? '<div class="hbars">' + statuses.map((s) => {
+        const n = byStatus[s];
+        return '<div class="hbar" data-tip="' + esc(s + '\n' + fmtN(n) + ' items · ' + pct(n, rows.length) + '%') + '"><div class="hbar-label"><span class="sw" style="background:' + toneVar(statusMeta(s).tone) + '"></span><span class="ellipsis">' + esc(s) + '</span></div>' +
+          '<div class="hbar-track"><div class="hbar-fill" style="width:' + (n / maxS) * 100 + '%;background:' + toneVar(statusMeta(s).tone) + '"></div></div>' +
+          '<div class="hbar-val">' + fmtN(n) + '<small>' + pct(n, rows.length) + '%</small></div></div>';
+      }).join('') + '</div>' : emptyState('No orders yet', 'Orders will appear here as soon as they are added to the FMS.')) +
+      '</div></div>';
+    html += '<div class="panel"><div class="panel-head"><div><h3>Orders per month</h3><div class="sub">Unique orders by order date · last 6 months</div></div></div><div class="panel-body">' +
+      '<div class="vbars">' + months.map((m, i) => '<div class="vbar" data-tip="' + esc(monthLabel(m) + '\n' + fmtN(mVals[i]) + ' orders · ' + fmtN(mQty[m] || 0) + ' units') + '"><div class="vbar-num">' + (mVals[i] ? fmtN(mVals[i]) : '') + '</div><div class="vbar-col" style="height:' + (mVals[i] / maxM) * 82 + '%"></div></div>').join('') + '</div>' +
+      '<div class="vbar-axis">' + months.map((m) => '<span>' + esc(monthLabel(m)) + '</span>').join('') + '</div></div></div>';
+    html += '</div>';
+
+    html += '<div class="grid-2-even">';
+    html += listPanel('Overdue items', 'Open items past their promise date', lateTop, late.length, 'overdue', (r) => '<span class="late">' + r.daysLate + ' day' + (r.daysLate === 1 ? '' : 's') + ' late</span>', 'Nothing overdue', 'Every open item is within its promise date.');
+    html += listPanel('Due in the next 7 days', 'Open items with an upcoming promise date', soonTop, soon.length, 'soon', (r) => '<span class="soon">Due ' + esc(r.promiseDate) + '</span>', 'Nothing due this week', 'No open items have a promise date in the next 7 days.');
+    html += '</div>';
+
+    if (isStaff() && !S.spFilter) html += teamPanel();
+
+    c.innerHTML = html;
+    bindScopeBar(c);
+    $$('[data-kpi]', c).forEach((el) => {
+      const fire = () => openTableWithQuick(el.getAttribute('data-kpi'));
+      el.addEventListener('click', fire);
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter') fire(); });
+    });
+    $$('[data-open-row]', c).forEach((el) => el.addEventListener('click', () => { const [k, i] = el.getAttribute('data-open-row').split(':'); openDetail(S.data.sources[k].rows[Number(i)]); }));
+    $$('[data-see]', c).forEach((el) => el.addEventListener('click', () => openTableWithQuick(el.getAttribute('data-see'))));
+    $$('[data-sp]', c).forEach((el) => el.addEventListener('click', () => { S.spFilter = el.getAttribute('data-sp'); updateNavBadges(); renderRoute(); window.scrollTo(0, 0); }));
+  }
+
+  function openTableWithQuick(q) {
+    const key = S.data.sources.o2d ? 'o2d' : 'tbo';
+    const st = tableState(key);
+    Object.assign(st, defaultTableState(), { quick: q, size: st.size });
+    go(key);
+  }
+
+  function listPanel(title, sub, items, total, quick, right, emptyT, emptyS) {
+    return '<div class="panel"><div class="panel-head"><div><h3>' + esc(title) + '</h3><div class="sub">' + esc(sub) + '</div></div>' +
+      (total ? '<button class="btn btn-sm" data-see="' + quick + '">View all ' + fmtN(total) + '</button>' : '') + '</div><div class="panel-body">' +
+      (items.length ? '<div class="list">' + items.map((r) =>
+        '<div class="list-item" data-open-row="' + r._src + ':' + r._i + '"><div class="li-title ellipsis">' + esc(r.customer || '—') + '</div>' +
+        '<div class="li-right">' + right(r) + '<span class="tiny muted">' + esc(r.orderId) + '</span></div>' +
+        '<div class="li-sub ellipsis">' + esc(r.item) + ' · ' + fmtN(r.qty) + ' pcs' + (isStaff() ? ' · ' + esc(titleCase(r.salesperson)) : '') + ' · ' + (r._src === 'o2d' ? 'O2D' : 'TBO') + '</div></div>').join('') + '</div>'
+        : emptyState(emptyT, emptyS)) + '</div></div>';
+  }
+
+  function emptyState(t, s) {
+    return '<div class="empty">' + I.inbox + '<b>' + esc(t) + '</b><span class="small">' + esc(s) + '</span></div>';
+  }
+
+  function teamPanel() {
+    const all = allScopedRows();
+    const by = {};
+    all.forEach((r) => {
+      const k = String(r.salesperson || '').replace(/\s+/g, ' ').trim().toUpperCase() || '(UNASSIGNED)';
+      const b = by[k] = by[k] || { name: k, rows: [] };
+      b.rows.push(r);
+    });
+    const list = Object.values(by).map((b) => ({
+      name: b.name, orders: uniqueOrders(b.rows), items: b.rows.length, units: sumQty(b.rows),
+      open: b.rows.filter(isOpen).length, done: b.rows.filter((r) => r.isDone).length,
+      late: b.rows.filter((r) => r.isOverdue).length, cancelled: b.rows.filter((r) => r.isCancelled).length
+    })).sort((a, b) => b.orders - a.orders);
+    const maxO = Math.max(1, ...list.map((x) => x.orders));
+    return '<div class="panel"><div class="panel-head"><div><h3>Salesperson performance</h3><div class="sub">Both sheets combined · select a row to drill into that salesperson</div></div></div>' +
+      '<div class="panel-body" style="padding-top:10px"><div class="table-wrap"><table class="data"><thead><tr>' +
+      '<th>Salesperson</th><th style="min-width:160px">Orders</th><th class="n">Items</th><th class="n">Units</th><th class="n">Open</th><th class="n">Delivered</th><th class="n">Delivered %</th><th class="n">Overdue</th><th class="n">Cancelled</th></tr></thead><tbody>' +
+      list.map((x) => '<tr data-sp="' + esc(x.name) + '"><td><div class="ucell"><span class="avatar sm">' + esc(initials(x.name)) + '</span><span class="cell-strong">' + esc(titleCase(x.name)) + '</span></div></td>' +
+        '<td><div style="display:flex;align-items:center;gap:10px"><div class="hbar-track" style="flex:1;max-width:120px"><div class="hbar-fill" style="width:' + (x.orders / maxO) * 100 + '%;background:var(--data)"></div></div><b class="num">' + fmtN(x.orders) + '</b></div></td>' +
+        '<td class="n">' + fmtN(x.items) + '</td><td class="n">' + fmtN(x.units) + '</td><td class="n">' + fmtN(x.open) + '</td><td class="n">' + fmtN(x.done) + '</td>' +
+        '<td class="n">' + pct(x.done, x.items) + '%</td><td class="n">' + (x.late ? '<span class="late">' + fmtN(x.late) + '</span>' : '0') + '</td><td class="n">' + fmtN(x.cancelled) + '</td></tr>').join('') +
+      '</tbody></table></div></div></div>';
+  }
+
+  /* ---------------------------------------------------------- data tables */
+  function defaultTableState() {
+    return { q: '', status: '', orderType: '', productType: '', transport: '', dateField: 'timestampIso', from: '', to: '', quick: 'all', sort: { key: 'timestampIso', dir: 'desc' }, page: 1, size: 25 };
+  }
+  function tableState(key) { return S.tables[key] = S.tables[key] || defaultTableState(); }
+
+  const QUICK = [
+    { id: 'all', label: 'All', fn: () => true },
+    { id: 'open', label: 'Open', fn: isOpen },
+    { id: 'overdue', label: 'Overdue', fn: (r) => r.isOverdue },
+    { id: 'soon', label: 'Due in 7 days', fn: isDueSoon },
+    { id: 'delivered', label: 'Delivered', fn: (r) => r.isDone },
+    { id: 'cancelled', label: 'Cancelled', fn: (r) => r.isCancelled }
+  ];
+
+  function columns(key) {
+    const cols = [
+      { key: 'orderId', label: 'Order', sort: 'orderId', html: (r) => '<div class="cell-strong">' + esc(r.orderId || '—') + '</div><div class="cell-sub" style="white-space:nowrap">' + esc((r.timestamp || '').substring(0, 10)) + (r.orderType ? ' · ' + esc(titleCase(r.orderType)) : '') + '</div>' },
+      { key: 'customer', label: 'Customer', sort: 'customer', html: (r) => '<div class="cell-strong cell-max" title="' + esc(r.customer) + '">' + esc(r.customer || '—') + '</div><div class="cell-sub cell-max">' + esc([r.city, r.transport].filter(Boolean).join(' · ')) + '</div>' },
+      { key: 'item', label: 'Item', sort: 'item', html: (r) => '<div class="item-cell">' + thumb(r, 72) + '<div style="min-width:0"><div class="cell-max" title="' + esc(r.item) + '">' + esc(r.item || '—') + '</div><div class="cell-sub">' + esc(r.productType || '') + '</div></div></div>' },
+      { key: 'qty', label: 'Qty', sort: 'qty', n: true, html: (r) => '<b>' + fmtN(r.qty) + '</b>' },
+      { key: 'expectedDate', label: 'Expected', sort: 'expectedDateIso', html: (r) => esc(r.expectedDate || '—') },
+      { key: 'promiseDate', label: 'Promise', sort: 'promiseDateIso', html: (r) => esc(r.promiseDate || '—') + (r.isOverdue ? '<div class="late">' + r.daysLate + 'd late</div>' : isDueSoon(r) ? '<div class="soon">Due soon</div>' : '') },
+      { key: 'status', label: 'Status', sort: 'status', html: (r) => pill(r.status) }
+    ];
+    if (isStaff()) cols.push({ key: 'salesperson', label: 'Salesperson', sort: 'salesperson', html: (r) => esc(titleCase(r.salesperson)) });
+    return cols;
+  }
+
+  function thumb(r, size) {
+    const u = thumbUrl(r.imageUrl, size * 2);
+    return '<span class="thumb">' + (u ? '<img loading="lazy" referrerpolicy="no-referrer" alt="" src="' + esc(u) + '" onerror="this.remove()">' : '') + I.image + '</span>';
+  }
+
+  function filterRows(key) {
+    const st = tableState(key);
+    const q = st.q.trim().toLowerCase();
+    const terms = q ? q.split(/\s+/) : [];
+    const quick = (QUICK.find((x) => x.id === st.quick) || QUICK[0]).fn;
+    return scopedRows(key).filter((r) => {
+      if (!quick(r)) return false;
+      if (st.status && r.status !== st.status) return false;
+      if (st.orderType && r.orderType !== st.orderType) return false;
+      if (st.productType && r.productType !== st.productType) return false;
+      if (st.transport && r.transport !== st.transport) return false;
+      if (st.from || st.to) {
+        const d = (r[st.dateField] || '').substring(0, 10);
+        if (!d) return false;
+        if (st.from && d < st.from) return false;
+        if (st.to && d > st.to) return false;
+      }
+      for (let i = 0; i < terms.length; i++) if (r._q.indexOf(terms[i]) < 0) return false;
+      return true;
+    });
+  }
+
+  function sortRows(rows, sort) {
+    const k = sort.key, dir = sort.dir === 'asc' ? 1 : -1;
+    return rows.slice().sort((a, b) => {
+      let x = a[k], y = b[k];
+      const ex = x === '' || x == null, ey = y === '' || y == null;
+      if (ex && ey) return 0;
+      if (ex) return 1;
+      if (ey) return -1;
+      if (typeof x === 'number' && typeof y === 'number') return (x - y) * dir;
+      return String(x).localeCompare(String(y), 'en', { numeric: true, sensitivity: 'base' }) * dir;
+    });
+  }
+
+  function distinct(rows, f) {
+    const s = {};
+    rows.forEach((r) => { if (r[f]) s[r[f]] = (s[r[f]] || 0) + 1; });
+    return Object.keys(s).sort();
+  }
+
+  function activeFilterCount(st) {
+    return ['status', 'orderType', 'productType', 'transport', 'from', 'to'].filter((k) => st[k]).length;
+  }
+
+  function renderTable(c, key) {
+    const src = S.data.sources[key];
+    if (!src) { c.innerHTML = emptyState('Not available', 'You do not have access to this sheet.'); return; }
+    const st = tableState(key);
+    const base = scopedRows(key);
+    const cols = columns(key);
+    const opt = (vals, cur, all) => '<option value="">' + all + '</option>' + vals.map((v) => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>').join('');
+    const qc = {};
+    QUICK.forEach((q) => { qc[q.id] = base.filter(q.fn).length; });
+    const canExport = S.user.permissions.export !== false;
+
+    c.innerHTML = scopeBar() +
+      '<div class="panel">' +
+      '<div class="toolbar">' +
+        '<div class="toolbar-row"><div class="search">' + I.search + '<input type="search" id="t-q" placeholder="Search order ID, customer, item, city, phone…" value="' + esc(st.q) + '" autocomplete="off"></div>' +
+        '<button class="btn" id="t-reset">Reset</button>' +
+        (canExport ? '<button class="btn" id="t-export">' + I.download + '<span class="hide-sm">Export CSV</span></button>' : '') + '</div>' +
+        '<div class="chips">' + QUICK.map((q) => '<button class="chip' + (st.quick === q.id ? ' on' : '') + '" data-quick="' + q.id + '">' + esc(q.label) + '<span class="cnt">' + fmtN(qc[q.id]) + '</span></button>').join('') + '</div>' +
+        '<button class="btn btn-sm only-mobile-flex" id="t-ftoggle" aria-expanded="false">Filters' + (activeFilterCount(st) ? ' · ' + activeFilterCount(st) : '') + '</button>' +
+        '<div class="filters" id="t-filters">' +
+          '<label class="field"><span>Status</span><select data-f="status">' + opt(distinct(base, 'status'), st.status, 'All statuses') + '</select></label>' +
+          '<label class="field"><span>Order type</span><select data-f="orderType">' + opt(distinct(base, 'orderType'), st.orderType, 'All types') + '</select></label>' +
+          '<label class="field"><span>Product type</span><select data-f="productType">' + opt(distinct(base, 'productType'), st.productType, 'All products') + '</select></label>' +
+          '<label class="field"><span>Transport</span><select data-f="transport">' + opt(distinct(base, 'transport'), st.transport, 'All methods') + '</select></label>' +
+          '<label class="field"><span>Date field</span><select data-f="dateField">' +
+            [['timestampIso', 'Order date'], ['expectedDateIso', 'Expected delivery'], ['promiseDateIso', 'Promise date']].map((d) => '<option value="' + d[0] + '"' + (st.dateField === d[0] ? ' selected' : '') + '>' + d[1] + '</option>').join('') + '</select></label>' +
+          '<label class="field"><span>From</span><input type="date" data-f="from" value="' + esc(st.from) + '"></label>' +
+          '<label class="field"><span>To</span><input type="date" data-f="to" value="' + esc(st.to) + '"></label>' +
+        '</div>' +
+      '</div>' +
+      '<div id="t-results"></div>' +
+      '</div>';
+
+    bindScopeBar(c);
+    const rerender = () => renderTableResults(key, cols);
+    let deb;
+    $('#t-q', c).addEventListener('input', (e) => { clearTimeout(deb); deb = setTimeout(() => { st.q = e.target.value; st.page = 1; rerender(); }, 160); });
+    $$('[data-f]', c).forEach((el) => el.addEventListener('change', () => { st[el.getAttribute('data-f')] = el.value; st.page = 1; rerender(); }));
+    $$('[data-quick]', c).forEach((el) => el.addEventListener('click', () => {
+      st.quick = el.getAttribute('data-quick'); st.page = 1;
+      $$('[data-quick]', c).forEach((b) => b.classList.toggle('on', b === el));
+      rerender();
+    }));
+    $('#t-ftoggle', c).addEventListener('click', (e) => { const f = $('#t-filters', c); const open = !f.classList.contains('open'); f.classList.toggle('open', open); e.currentTarget.setAttribute('aria-expanded', String(open)); });
+    $('#t-reset', c).addEventListener('click', () => { S.tables[key] = Object.assign(defaultTableState(), { size: st.size }); renderTable(c, key); });
+    const ex = $('#t-export', c);
+    if (ex) ex.addEventListener('click', () => exportCsv(key));
+    rerender();
+  }
+
+  function renderTableResults(key, cols) {
+    const st = tableState(key);
+    const host = $('#t-results');
+    if (!host) return;
+    const rows = sortRows(filterRows(key), st.sort);
+    const pages = Math.max(1, Math.ceil(rows.length / st.size));
+    if (st.page > pages) st.page = pages;
+    const start = (st.page - 1) * st.size;
+    const pageRows = rows.slice(start, start + st.size);
+    const units = sumQty(rows);
+
+    if (!rows.length) {
+      host.innerHTML = emptyState('No matching items', 'Try clearing a filter or changing the search.');
+      return;
+    }
+    const head = cols.map((col) => {
+      const on = st.sort.key === col.sort;
+      return '<th class="sortable' + (col.n ? ' n' : '') + '" data-sort="' + col.sort + '" aria-sort="' + (on ? (st.sort.dir === 'asc' ? 'ascending' : 'descending') : 'none') + '">' + esc(col.label) + '<span class="arrow">' + (on ? (st.sort.dir === 'asc' ? '▲' : '▼') : '') + '</span></th>';
+    }).join('');
+    const body = pageRows.map((r) => '<tr data-row="' + r._i + '"' + (r.isOverdue ? ' class="row-overdue"' : '') + '>' + cols.map((col) => '<td' + (col.n ? ' class="n"' : '') + '>' + col.html(r) + '</td>').join('') + '</tr>').join('');
+    const cards = pageRows.map((r) => '<div class="ocard" data-row="' + r._i + '"><div class="ocard-top">' + thumb(r, 96) +
+      '<div class="ocard-main"><div class="cell-strong ellipsis">' + esc(r.customer || '—') + '</div><div class="cell-sub ellipsis">' + esc(r.item) + ' · ' + fmtN(r.qty) + ' pcs</div><div style="margin-top:6px">' + pill(r.status) + '</div></div></div>' +
+      '<div class="ocard-meta"><div><span>Order</span>' + esc(r.orderId) + '</div><div><span>Order date</span>' + esc((r.timestamp || '').substring(0, 10) || '—') + '</div>' +
+      '<div><span>Promise</span>' + esc(r.promiseDate || '—') + (r.isOverdue ? ' <span class="late">' + r.daysLate + 'd late</span>' : '') + '</div><div><span>City</span>' + esc(r.city || '—') + '</div>' +
+      (isStaff() ? '<div><span>Salesperson</span>' + esc(titleCase(r.salesperson)) + '</div>' : '') + '</div></div>').join('');
+
+    host.innerHTML =
+      '<div class="table-wrap responsive"><table class="data"><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table></div>' +
+      '<div class="cards">' + cards + '</div>' +
+      '<div class="pager"><div class="small muted">Showing <b>' + fmtN(start + 1) + '–' + fmtN(start + pageRows.length) + '</b> of <b>' + fmtN(rows.length) + '</b> items · ' + fmtN(uniqueOrders(rows)) + ' orders · ' + fmtN(units) + ' units</div>' +
+      '<div class="pager-pages">' + pagerButtons(st.page, pages) + '</div>' +
+      '<label class="small muted" style="display:flex;gap:8px;align-items:center">Rows <select id="t-size">' + [10, 25, 50, 100].map((n) => '<option' + (n === st.size ? ' selected' : '') + '>' + n + '</option>').join('') + '</select></label></div>';
+
+    $$('[data-sort]', host).forEach((th) => th.addEventListener('click', () => {
+      const k = th.getAttribute('data-sort');
+      st.sort = st.sort.key === k ? { key: k, dir: st.sort.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: (k === 'qty' || /Iso$/.test(k)) ? 'desc' : 'asc' };
+      renderTableResults(key, cols);
+    }));
+    $$('[data-row]', host).forEach((tr) => tr.addEventListener('click', () => openDetail(S.data.sources[key].rows[Number(tr.getAttribute('data-row'))])));
+    $$('[data-page]', host).forEach((b) => b.addEventListener('click', () => { st.page = Number(b.getAttribute('data-page')); renderTableResults(key, cols); host.scrollIntoView({ block: 'start', behavior: 'smooth' }); }));
+    $('#t-size', host).addEventListener('change', (e) => { st.size = Number(e.target.value); st.page = 1; renderTableResults(key, cols); });
+  }
+
+  function pagerButtons(page, pages) {
+    const btn = (p, label, dis, on) => '<button class="pg' + (on ? ' on' : '') + '"' + (dis ? ' disabled' : ' data-page="' + p + '"') + '>' + label + '</button>';
+    const out = [btn(page - 1, '‹', page <= 1)];
+    const set = new Set([1, pages, page - 1, page, page + 1].filter((p) => p >= 1 && p <= pages));
+    let prev = 0;
+    Array.from(set).sort((a, b) => a - b).forEach((p) => {
+      if (p - prev > 1) out.push('<span class="muted" style="padding:0 4px">…</span>');
+      out.push(btn(p, String(p), false, p === page));
+      prev = p;
+    });
+    out.push(btn(page + 1, '›', page >= pages));
+    return out.join('');
+  }
+
+  function exportCsv(key) {
+    const src = S.data.sources[key];
+    const rows = sortRows(filterRows(key), tableState(key).sort);
+    const fields = ['timestamp', 'orderId', 'orderType', 'transport', 'customer', 'contact', 'city', 'item', 'imageUrl', 'qty', 'expectedDate', 'salesperson', 'productType', 'promiseDate', 'orderStatus', 'finalStatus'];
+    const headers = fields.map((f, i) => src.headers[i] || f).concat(['Overdue (days)']);
+    const cell = (v) => {
+      let s = String(v == null ? '' : v);
+      if (/^[=+\-@]/.test(s)) s = "'" + s; // CSV formula-injection guard
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [headers.map(cell).join(',')].concat(rows.map((r) => fields.map((f) => cell(r[f])).concat([r.isOverdue ? r.daysLate : '']).join(',')));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (key === 'o2d' ? 'o2d_orders' : 'to_be_ordered') + '_' + today() + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    call('logEvent', { type: 'EXPORT', detail: src.label + ' — ' + rows.length + ' rows' }).catch(() => {});
+    toast('Exported ' + fmtN(rows.length) + ' rows.', 'success');
+  }
+
+  /* --------------------------------------------------------- detail drawer */
+  function openDetail(r) {
+    if (!r) return;
+    const src = S.data.sources[r._src];
+    const H = src.headers;
+    const label = (i, fb) => esc(H[i] || fb);
+    const siblings = src.rows.filter((x) => x.orderId && x.orderId === r.orderId && x !== r);
+    const big = thumbUrl(r.imageUrl, 800);
+    const host = $('#drawer-host');
+    host.innerHTML = '<aside class="drawer" role="dialog" aria-modal="true" aria-label="Order details">' +
+      '<div class="drawer-head"><div style="flex:1;min-width:0"><div class="tiny muted">' + esc(src.label) + ' · Sheet row ' + esc(r._row) + '</div><h3 class="ellipsis">' + esc(r.orderId || 'Order') + '</h3>' +
+      '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + pill(r.status) + (r.isOverdue ? '<span class="pill st-critical"><span class="dot"></span>' + r.daysLate + ' days overdue</span>' : '') + '</div></div>' +
+      '<button class="icon-btn" data-close aria-label="Close">' + I.x + '</button></div>' +
+      '<div class="drawer-body">' +
+      '<div class="detail-img">' + (big ? '<img alt="' + esc(r.item) + '" referrerpolicy="no-referrer" src="' + esc(big) + '" onerror="this.replaceWith(document.createTextNode(\'Image unavailable\'))">' : 'No image') + '</div>' +
+      (safeUrl(r.imageUrl) ? '<a class="small" href="' + esc(safeUrl(r.imageUrl)) + '" target="_blank" rel="noopener noreferrer">Open image in new tab ↗</a>' : '') +
+      '<div class="section-title">Order</div><dl class="dl">' +
+        '<div><dt>' + label(7, 'Item') + '</dt><dd>' + esc(r.item || '—') + '</dd></div>' +
+        '<div><dt>' + label(9, 'Qty') + '</dt><dd>' + fmtN(r.qty) + '</dd></div>' +
+        '<div><dt>' + label(2, 'Order Type') + '</dt><dd>' + esc(r.orderType || '—') + '</dd></div>' +
+        '<div><dt>' + label(12, 'Product Type') + '</dt><dd>' + esc(r.productType || '—') + '</dd></div>' +
+        '<div><dt>' + label(0, 'Timestamp') + '</dt><dd>' + esc(r.timestamp || '—') + '</dd></div>' +
+        '<div><dt>' + label(3, 'Transport') + '</dt><dd>' + esc(r.transport || '—') + '</dd></div>' +
+        '<div><dt>' + label(10, 'Expected Delivery') + '</dt><dd>' + esc(r.expectedDate || '—') + '</dd></div>' +
+        '<div><dt>' + label(13, 'Promise Date') + '</dt><dd>' + esc(r.promiseDate || '—') + '</dd></div>' +
+        '<div><dt>' + label(14, 'Order Status') + '</dt><dd>' + esc(r.orderStatus || '—') + '</dd></div>' +
+        '<div><dt>' + label(15, 'Final Status') + '</dt><dd>' + esc(r.finalStatus || '—') + '</dd></div>' +
+      '</dl>' +
+      '<div class="section-title">Customer</div><dl class="dl">' +
+        '<div><dt>' + label(4, 'Customer') + '</dt><dd>' + esc(r.customer || '—') + '</dd></div>' +
+        '<div><dt>' + label(5, 'Contact') + '</dt><dd>' + (r.contact ? '<a href="tel:' + esc(String(r.contact).replace(/[^0-9+]/g, '')) + '">' + esc(r.contact) + '</a>' : '—') + '</dd></div>' +
+        '<div><dt>' + label(6, 'City') + '</dt><dd>' + esc(r.city || '—') + '</dd></div>' +
+        '<div><dt>' + label(11, 'Salesperson') + '</dt><dd>' + esc(r.salesperson || '—') + '</dd></div>' +
+      '</dl>' +
+      (siblings.length ? '<div class="section-title">Other items in this order (' + siblings.length + ')</div><div class="mini-lines">' + siblings.map((x) =>
+        '<div class="mini-line" data-sib="' + x._i + '" style="cursor:pointer">' + thumb(x, 72) + '<div class="grow"><div class="ellipsis cell-strong">' + esc(x.item) + '</div><div class="cell-sub">' + fmtN(x.qty) + ' pcs · Promise ' + esc(x.promiseDate || '—') + '</div></div>' + pill(x.status) + '</div>').join('') + '</div>' : '') +
+      '</div></aside>';
+    host.hidden = false;
+    host.onclick = (e) => { if (e.target === host || e.target.closest('[data-close]')) closeDrawer(); };
+    $$('[data-sib]', host).forEach((el) => el.addEventListener('click', () => openDetail(src.rows[Number(el.getAttribute('data-sib'))])));
+    $('[data-close]', host).focus();
+  }
+  function closeDrawer() { const h = $('#drawer-host'); h.hidden = true; h.innerHTML = ''; }
+
+  /* ---------------------------------------------------------------- modal */
+  function openModal(html, onMount) {
+    const host = $('#modal-host');
+    host.innerHTML = '<div class="modal" role="dialog" aria-modal="true">' + html + '</div>';
+    host.hidden = false;
+    host.onclick = (e) => { if (e.target === host || e.target.closest('[data-dismiss]')) closeModal(); };
+    if (onMount) onMount($('.modal', host));
+    const first = $('input:not([type=checkbox]):not([readonly]), select, button.btn-primary', host);
+    if (first) first.focus();
+  }
+  function closeModal() { const h = $('#modal-host'); h.hidden = true; h.innerHTML = ''; }
+  function modalHead(title, sub) {
+    return '<div class="modal-head"><div><h3>' + esc(title) + '</h3>' + (sub ? '<div class="small muted" style="margin-top:4px">' + esc(sub) + '</div>' : '') + '</div><button class="icon-btn" data-dismiss aria-label="Close">' + I.x + '</button></div>';
+  }
+  function confirmBox(title, message, okLabel, danger) {
+    return new Promise((resolve) => {
+      openModal(modalHead(title) + '<div class="modal-body"><p style="margin:0">' + esc(message) + '</p></div>' +
+        '<div class="modal-foot"><button class="btn" data-dismiss>Cancel</button><button class="btn ' + (danger ? 'btn-danger' : 'btn-primary') + '" id="cf-ok">' + esc(okLabel || 'Confirm') + '</button></div>',
+        (m) => { $('#cf-ok', m).addEventListener('click', () => { closeModal(); resolve(true); }); });
+      const host = $('#modal-host');
+      const prev = host.onclick;
+      host.onclick = (e) => { if (e.target === host || e.target.closest('[data-dismiss]')) { resolve(false); } prev(e); };
+    });
+  }
+
+  function changePasswordModal() {
+    openModal(modalHead('Change password', 'You will stay signed in on this device; other sessions are signed out.') +
+      '<form id="pw-form" novalidate><div class="modal-body"><div id="pw-alert" class="alert" hidden></div>' +
+      '<label class="field"><span>Current password</span><input type="password" id="m-cur" autocomplete="current-password" maxlength="128"></label>' +
+      '<label class="field"><span>New password</span><input type="password" id="m-new" autocomplete="new-password" maxlength="128"><span class="hint">At least ' + (S.settings.passwordMinLength || 8) + ' characters with a letter and a number.</span></label>' +
+      '<label class="field"><span>Confirm new password</span><input type="password" id="m-cf" autocomplete="new-password" maxlength="128"></label></div>' +
+      '<div class="modal-foot"><button type="button" class="btn" data-dismiss>Cancel</button><button type="submit" class="btn btn-primary" id="m-save">Update password</button></div></form>', (m) => {
+      $('#pw-form', m).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const al = $('#pw-alert', m);
+        const cur = $('#m-cur', m).value, nw = $('#m-new', m).value, cf = $('#m-cf', m).value;
+        const p = !cur ? 'Enter your current password.' : pwProblem(nw, cf);
+        if (p) { setAlert(al, p); return; }
+        const b = $('#m-save', m); setBusy(b, true, 'Saving…');
+        try {
+          const res = await call('changePassword', { currentPassword: cur, newPassword: nw });
+          S.token = res.token; store.set(TOKEN_KEY, res.token); S.user = res.user;
+          closeModal(); toast('Password updated.', 'success');
+        } catch (err) { if (err.code === 'AUTH_REQUIRED') handleError(err); else setAlert(al, err.error || 'Could not update password.'); setBusy(b, false); }
+      });
+    });
+  }
+
+  function credentialsModal(title, loginId, password, note) {
+    openModal(modalHead(title, 'Share these credentials privately. The password is shown only once.') +
+      '<div class="modal-body"><div class="cred-box"><div>Login ID: <code>' + esc(loginId) + '</code></div><div>Password: <code id="cred-pw">' + esc(password) + '</code></div>' +
+      '<div class="tiny muted">The user will be asked to set their own password at first sign-in.</div></div>' + (note ? '<div class="alert warn">' + esc(note) + '</div>' : '') + '</div>' +
+      '<div class="modal-foot"><button class="btn" id="cred-copy">Copy</button><button class="btn btn-primary" data-dismiss>Done</button></div>', (m) => {
+      $('#cred-copy', m).addEventListener('click', () => {
+        const text = 'Login ID: ' + loginId + '\nPassword: ' + password;
+        const done = () => toast('Copied to clipboard.', 'success');
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+        else fallbackCopy(text, done);
+      });
+    });
+  }
+  function fallbackCopy(text, done) {
+    const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { toast('Select and copy the text manually.'); }
+    ta.remove();
+  }
+
+  /* ---------------------------------------------------------- admin: users */
+  async function loadUsers(force) {
+    if (S.admin.users && !force) return;
+    const res = await call('listUsers');
+    S.admin.users = res.users; S.admin.salespersons = res.salespersons || [];
+  }
+
+  async function renderUsers(c) {
+    if (!isAdmin()) { c.innerHTML = emptyState('Not authorised', 'Administrator access is required.'); return; }
+    if (!S.admin.users) c.innerHTML = skeleton();
+    try { await loadUsers(false); } catch (err) { handleError(err); return; }
+    if (S.route !== 'users') return;
+    drawUsers(c);
+  }
+
+  function drawUsers(c) {
+    const A = S.admin;
+    const users = A.users;
+    const q = A.userQ.toLowerCase();
+    const list = users.filter((u) =>
+      (!q || (u.displayName + ' ' + u.loginId + ' ' + u.salesperson).toLowerCase().indexOf(q) >= 0) &&
+      (!A.userRole || u.role === A.userRole) && (!A.userStatus || (A.userStatus === 'locked' ? u.locked : u.status === A.userStatus)));
+    const mapped = new Set(users.filter((u) => u.role === 'salesperson').map((u) => u.salesperson.toUpperCase()));
+    const unassigned = A.salespersons.filter((n) => !mapped.has(n.toUpperCase()));
+
+    let html = '<div class="panel"><div class="panel-body"><div class="stat-inline">' +
+      '<div><b class="num">' + users.length + '</b><span>Total accounts</span></div>' +
+      '<div><b class="num">' + users.filter((u) => u.status === 'active').length + '</b><span>Active</span></div>' +
+      '<div><b class="num">' + users.filter((u) => u.online).length + '</b><span>Online now (10 min)</span></div>' +
+      '<div><b class="num">' + users.filter((u) => u.locked).length + '</b><span>Locked out</span></div>' +
+      '<div><b class="num">' + users.filter((u) => u.role === 'admin').length + '</b><span>Administrators</span></div></div></div></div>';
+
+    if (unassigned.length) {
+      html += '<div class="alert info" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><span style="flex:1;min-width:220px"><b>Salespersons without an account:</b> ' + unassigned.map((n) => esc(titleCase(n))).join(', ') + '</span>' +
+        unassigned.map((n) => '<button class="btn btn-sm" data-new-for="' + esc(n) + '">' + I.plus + 'Create for ' + esc(titleCase(n).split(' ')[0]) + '</button>').join('') + '</div>';
+    }
+
+    html += '<div class="panel"><div class="toolbar"><div class="toolbar-row">' +
+      '<div class="search">' + I.search + '<input type="search" id="u-q" placeholder="Search users…" value="' + esc(A.userQ) + '"></div>' +
+      '<select id="u-role" style="width:auto"><option value="">All roles</option>' + ['admin', 'manager', 'salesperson'].map((r) => '<option value="' + r + '"' + (A.userRole === r ? ' selected' : '') + '>' + titleCase(r) + '</option>').join('') + '</select>' +
+      '<select id="u-status" style="width:auto"><option value="">All statuses</option>' + [['active', 'Active'], ['inactive', 'Inactive'], ['locked', 'Locked']].map((s) => '<option value="' + s[0] + '"' + (A.userStatus === s[0] ? ' selected' : '') + '>' + s[1] + '</option>').join('') + '</select>' +
+      '<button class="btn" id="u-reload">Refresh</button><button class="btn btn-primary" id="u-new">' + I.plus + 'Add user</button></div></div>';
+
+    if (!list.length) html += emptyState('No users found', 'Adjust the filters or add a new user.');
+    else html += '<div class="table-wrap"><table class="data"><thead><tr><th>User</th><th>Role</th><th>Salesperson (column L)</th><th>Access</th><th>Status</th><th>Last sign-in</th><th class="n">Actions</th></tr></thead><tbody>' +
+      list.map((u) => '<tr data-uid="' + esc(u.userId) + '" style="cursor:default">' +
+        '<td><div class="ucell"><span class="avatar sm">' + esc(initials(u.displayName)) + '</span><div><div class="cell-strong">' + esc(u.displayName) + (u.online ? ' <span class="online-dot" data-tip="Active in the last 10 minutes"></span>' : '') + '</div><div class="cell-sub">@' + esc(u.loginId) + (u.userId === S.user.userId ? ' · you' : '') + '</div></div></div></td>' +
+        '<td><span class="tag role-' + esc(u.role) + '">' + esc(titleCase(u.role)) + '</span></td>' +
+        '<td>' + (u.role === 'salesperson' ? esc(titleCase(u.salesperson)) : '<span class="muted">All data</span>') + '</td>' +
+        '<td><div style="display:flex;gap:4px;flex-wrap:wrap">' + (u.permissions.o2d !== false ? '<span class="tag">O2D</span>' : '') + (u.permissions.tbo !== false ? '<span class="tag">TBO</span>' : '') + (u.permissions.export !== false ? '<span class="tag">Export</span>' : '') + '</div></td>' +
+        '<td>' + (u.status === 'active' ? '<span class="pill st-good"><span class="dot"></span>Active</span>' : '<span class="pill st-neutral"><span class="dot"></span>Inactive</span>') +
+          (u.locked ? ' <span class="pill st-critical"><span class="dot"></span>Locked</span>' : '') + (u.mustChange ? '<div class="cell-sub">Must change password</div>' : '') + '</td>' +
+        '<td><div>' + esc(timeAgo(u.lastLoginAt)) + '</div><div class="cell-sub">' + (u.lastSeenAt ? 'Seen ' + esc(timeAgo(u.lastSeenAt)) : 'Never signed in') + '</div></td>' +
+        '<td class="n"><div class="row-actions"><button class="btn btn-sm" data-act="edit">Edit</button>' +
+          '<div class="dropdown"><button class="btn btn-sm btn-ghost" data-act="more" aria-label="More actions">' + I.more + '</button></div></div></td></tr>').join('') +
+      '</tbody></table></div>';
+    html += '</div>';
+    c.innerHTML = html;
+
+    let deb;
+    $('#u-q', c).addEventListener('input', (e) => { clearTimeout(deb); deb = setTimeout(() => { A.userQ = e.target.value; drawUsers(c); const i = $('#u-q', c); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 200); });
+    $('#u-role', c).addEventListener('change', (e) => { A.userRole = e.target.value; drawUsers(c); });
+    $('#u-status', c).addEventListener('change', (e) => { A.userStatus = e.target.value; drawUsers(c); });
+    $('#u-reload', c).addEventListener('click', async () => { try { await loadUsers(true); drawUsers(c); toast('User list refreshed.'); } catch (err) { handleError(err); } });
+    $('#u-new', c).addEventListener('click', () => userModal(null));
+    $$('[data-new-for]', c).forEach((b) => b.addEventListener('click', () => userModal(null, b.getAttribute('data-new-for'))));
+    $$('tr[data-uid]', c).forEach((tr) => {
+      const u = users.find((x) => x.userId === tr.getAttribute('data-uid'));
+      $('[data-act="edit"]', tr).addEventListener('click', () => userModal(u));
+      $('[data-act="more"]', tr).addEventListener('click', (e) => { e.stopPropagation(); userMenu(e.currentTarget, u); });
+    });
+  }
+
+  function userMenu(anchor, u) {
+    $$('.dropdown .menu').forEach((m) => m.remove());
+    const self = u.userId === S.user.userId;
+    const items = [
+      ['reset', 'Reset password'],
+      ['logout', 'Force sign-out'],
+      u.locked ? ['unlock', 'Unlock account'] : null,
+      self ? null : (u.status === 'active' ? ['deactivate', 'Deactivate account'] : ['activate', 'Activate account']),
+      self ? null : ['delete', 'Delete account', 'danger']
+    ].filter(Boolean);
+    const m = document.createElement('div');
+    m.className = 'menu';
+    m.innerHTML = items.map((i) => '<button data-m="' + i[0] + '"' + (i[2] ? ' class="danger"' : '') + '>' + esc(i[1]) + '</button>').join('');
+    anchor.parentNode.appendChild(m);
+    const close = (e) => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener('click', close); } };
+    setTimeout(() => document.addEventListener('click', close), 0);
+    $$('[data-m]', m).forEach((b) => b.addEventListener('click', () => { m.remove(); document.removeEventListener('click', close); userAction(b.getAttribute('data-m'), u); }));
+  }
+
+  async function userAction(act, u) {
+    const c = $('#content');
+    try {
+      if (act === 'reset') return resetModal(u);
+      if (act === 'logout') {
+        if (!(await confirmBox('Force sign-out', 'Sign ' + u.displayName + ' out of every device now?', 'Sign out user'))) return;
+        const r = await call('forceLogout', { userId: u.userId });
+        if (r.self) { endSession('You signed yourself out.'); return; }
+        toast(u.displayName + ' has been signed out everywhere.', 'success');
+      } else if (act === 'unlock') {
+        await call('unlockUser', { userId: u.userId });
+        toast(u.displayName + ' can sign in again.', 'success');
+      } else if (act === 'deactivate' || act === 'activate') {
+        if (act === 'deactivate' && !(await confirmBox('Deactivate account', u.displayName + ' will be signed out immediately and cannot sign in until re-activated.', 'Deactivate', true))) return;
+        await call('setUserStatus', { userId: u.userId, status: act === 'activate' ? 'active' : 'inactive' });
+        toast(u.displayName + (act === 'activate' ? ' activated.' : ' deactivated.'), 'success');
+      } else if (act === 'delete') {
+        if (!(await confirmBox('Delete account', 'Permanently delete @' + u.loginId + '? Their activity history is kept. Consider deactivating instead.', 'Delete account', true))) return;
+        await call('deleteUser', { userId: u.userId });
+        toast('Account deleted.', 'success');
+      }
+      await loadUsers(true);
+      if (S.route === 'users') drawUsers(c);
+    } catch (err) { handleError(err); }
+  }
+
+  function spOptions(current) {
+    const names = S.admin.salespersons.slice();
+    if (current && names.map((n) => n.toUpperCase()).indexOf(current.toUpperCase()) < 0) names.push(current);
+    return '<option value="">— Select salesperson —</option>' + names.map((n) => '<option value="' + esc(n) + '"' + (current && n.toUpperCase() === current.toUpperCase() ? ' selected' : '') + '>' + esc(n) + '</option>').join('') + '<option value="__other">Other (type a name)…</option>';
+  }
+
+  function userModal(u, presetSp) {
+    const edit = !!u;
+    const p = (u && u.permissions) || { o2d: true, tbo: true, export: true };
+    const role = u ? u.role : 'salesperson';
+    const sp = u ? u.salesperson : (presetSp || '');
+    const suggestedId = presetSp ? presetSp.toLowerCase().split(' ')[0] : '';
+    openModal(modalHead(edit ? 'Edit user' : 'Add user', edit ? '@' + u.loginId : 'Create a login and link it to a salesperson.') +
+      '<form id="u-form" novalidate><div class="modal-body"><div id="u-alert" class="alert" hidden></div><div class="form-grid">' +
+      '<label class="field"><span>Full name</span><input type="text" id="f-name" maxlength="60" value="' + esc(u ? u.displayName : (presetSp ? titleCase(presetSp) : '')) + '"></label>' +
+      '<label class="field"><span>Login ID</span><input type="text" id="f-login" maxlength="32" autocapitalize="none" spellcheck="false" value="' + esc(u ? u.loginId : suggestedId) + '"' + (edit ? ' readonly style="background:var(--surface-3)"' : '') + '></label>' +
+      '<label class="field"><span>Role</span><select id="f-role">' + [['salesperson', 'Salesperson — own orders only'], ['manager', 'Manager — all data, read-only'], ['admin', 'Administrator — full control']].map((r) => '<option value="' + r[0] + '"' + (role === r[0] ? ' selected' : '') + '>' + r[1] + '</option>').join('') + '</select></label>' +
+      '<label class="field" id="f-sp-wrap"><span>Salesperson (column L)</span><select id="f-sp">' + spOptions(sp) + '</select>' +
+        '<input type="text" id="f-sp-other" maxlength="60" placeholder="Exact name as in column L" style="margin-top:8px" hidden></label>' +
+      (edit ? '' : '<label class="field full"><span>Initial password <span class="hint">— leave blank to generate a strong one</span></span><input type="text" id="f-pw" maxlength="128" autocomplete="new-password" spellcheck="false"></label>') +
+      '<div class="field full"><span>Access</span><div class="perm-row">' +
+        '<label class="check"><input type="checkbox" id="p-o2d"' + (p.o2d !== false ? ' checked' : '') + '>O2D Orders</label>' +
+        '<label class="check"><input type="checkbox" id="p-tbo"' + (p.tbo !== false ? ' checked' : '') + '>To Be Ordered</label>' +
+        '<label class="check"><input type="checkbox" id="p-exp"' + (p.export !== false ? ' checked' : '') + '>CSV export</label></div></div>' +
+      (edit ? '' : '<label class="check full"><input type="checkbox" id="f-must" checked>Require password change at first sign-in</label>') +
+      '</div>' + (edit ? '<p class="tiny muted" style="margin:0">Changing role, salesperson or access signs the user out so the new scope applies immediately.</p>' : '') + '</div>' +
+      '<div class="modal-foot"><button type="button" class="btn" data-dismiss>Cancel</button><button type="submit" class="btn btn-primary" id="f-save">' + (edit ? 'Save changes' : 'Create user') + '</button></div></form>', (m) => {
+      const roleSel = $('#f-role', m), spSel = $('#f-sp', m), other = $('#f-sp-other', m), wrap = $('#f-sp-wrap', m);
+      const syncRole = () => { wrap.style.opacity = roleSel.value === 'salesperson' ? '1' : '.5'; spSel.disabled = roleSel.value !== 'salesperson'; };
+      roleSel.addEventListener('change', syncRole); syncRole();
+      spSel.addEventListener('change', () => { other.hidden = spSel.value !== '__other'; if (!other.hidden) other.focus(); });
+      $('#u-form', m).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const al = $('#u-alert', m);
+        const r = roleSel.value;
+        const spVal = r === 'salesperson' ? (spSel.value === '__other' ? other.value.trim() : spSel.value) : '';
+        const payload = {
+          displayName: $('#f-name', m).value.trim(), role: r, salesperson: spVal,
+          permissions: { o2d: $('#p-o2d', m).checked, tbo: $('#p-tbo', m).checked, export: $('#p-exp', m).checked }
+        };
+        if (payload.displayName.length < 2) { setAlert(al, 'Enter the user\'s full name.'); return; }
+        if (r === 'salesperson' && !spVal) { setAlert(al, 'Select the salesperson this login belongs to.'); return; }
+        if (!payload.permissions.o2d && !payload.permissions.tbo) { setAlert(al, 'Grant access to at least one sheet.'); return; }
+        if (!edit) {
+          payload.loginId = $('#f-login', m).value.trim().toLowerCase();
+          payload.password = $('#f-pw', m).value;
+          payload.mustChange = $('#f-must', m).checked;
+          if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(payload.loginId)) { setAlert(al, 'Login ID: 3–32 characters (letters, numbers, dot, dash, underscore).'); return; }
+          if (payload.password) { const pp = pwProblem(payload.password); if (pp) { setAlert(al, pp.replace('new password', 'password')); return; } }
+        } else payload.userId = u.userId;
+        const b = $('#f-save', m); setBusy(b, true, 'Saving…');
+        try {
+          const res = await call(edit ? 'updateUser' : 'createUser', payload);
+          closeModal();
+          await loadUsers(true);
+          if (S.route === 'users') drawUsers($('#content'));
+          if (!edit && res.generatedPassword) credentialsModal('User created', res.user.loginId, res.generatedPassword, res.warning);
+          else { toast(edit ? 'Changes saved.' : 'User created.', 'success'); if (res.warning) toast(res.warning); }
+        } catch (err) { if (err.code === 'AUTH_REQUIRED') handleError(err); else { setAlert(al, err.error || 'Could not save.'); setBusy(b, false); } }
+      });
+    });
+  }
+
+  function resetModal(u) {
+    openModal(modalHead('Reset password', u.displayName + ' (@' + u.loginId + ') will be signed out of all devices.') +
+      '<form id="r-form" novalidate><div class="modal-body"><div id="r-alert" class="alert" hidden></div>' +
+      '<label class="field"><span>New password <span class="hint">— leave blank to generate one</span></span><input type="text" id="r-pw" maxlength="128" spellcheck="false" autocomplete="new-password"></label>' +
+      '<label class="check"><input type="checkbox" id="r-must" checked>Require change at next sign-in</label></div>' +
+      '<div class="modal-foot"><button type="button" class="btn" data-dismiss>Cancel</button><button type="submit" class="btn btn-primary" id="r-save">Reset password</button></div></form>', (m) => {
+      $('#r-form', m).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const pw = $('#r-pw', m).value;
+        if (pw) { const pp = pwProblem(pw); if (pp) { setAlert($('#r-alert', m), pp.replace('new password', 'password')); return; } }
+        const b = $('#r-save', m); setBusy(b, true, 'Resetting…');
+        try {
+          const res = await call('resetPassword', { userId: u.userId, password: pw, mustChange: $('#r-must', m).checked });
+          closeModal();
+          if (u.userId === S.user.userId) { endSession('Your password was reset. Please sign in again.'); return; }
+          if (res.generatedPassword) credentialsModal('Password reset', u.loginId, res.generatedPassword);
+          else toast('Password reset.', 'success');
+          await loadUsers(true);
+          if (S.route === 'users') drawUsers($('#content'));
+        } catch (err) { if (err.code === 'AUTH_REQUIRED') handleError(err); else { setAlert($('#r-alert', m), err.error || 'Could not reset.'); setBusy(b, false); } }
+      });
+    });
+  }
+
+  /* ------------------------------------------------------- admin: activity */
+  const EVENT_TONE = {
+    LOGIN_SUCCESS: 'good', LOGOUT: 'neutral', LOGIN_FAILED: 'serious', LOGIN_LOCKED: 'critical', LOGIN_BLOCKED: 'critical',
+    ACCESS_DENIED: 'critical', DATA_VIEW: 'info', EXPORT: 'violet', PASSWORD_CHANGED: 'aqua', PASSWORD_RESET: 'warn',
+    USER_CREATED: 'aqua', USER_UPDATED: 'info', USER_DELETED: 'critical', USER_DEACTIVATED: 'serious', USER_ACTIVATED: 'good',
+    FORCE_LOGOUT: 'warn', LOGOUT_ALL: 'warn', CACHE_CLEARED: 'neutral', SYSTEM_SETUP: 'violet', USER_UNLOCKED: 'good', PASSWORD_CHANGE_FAILED: 'serious', ADMIN_RECOVERY: 'critical'
+  };
+
+  async function renderActivity(c, force) {
+    if (!isAdmin()) { c.innerHTML = emptyState('Not authorised', 'Administrator access is required.'); return; }
+    const A = S.admin;
+    if (!A.activity || force) {
+      if (!A.activity) c.innerHTML = skeleton();
+      try { A.activity = (await call('getActivity', { limit: 400, loginId: A.actLogin, event: A.actEvent })).items; }
+      catch (err) { handleError(err); return; }
+      if (S.route !== 'activity') return;
+    }
+    const items = A.activity;
+    const todayStr = new Date().toDateString();
+    const todays = items.filter((i) => new Date(i.timestamp).toDateString() === todayStr);
+    const ev = Object.keys(EVENT_TONE).sort();
+    c.innerHTML = '<div class="kpis" style="grid-template-columns:repeat(4,minmax(0,1fr))">' +
+      kpiMini('Sign-ins today', todays.filter((i) => i.event === 'LOGIN_SUCCESS').length, 'good', I.check) +
+      kpiMini('Failed sign-ins today', todays.filter((i) => /LOGIN_(FAILED|LOCKED|BLOCKED)/.test(i.event)).length, 'warn', I.alert) +
+      kpiMini('Access denied today', todays.filter((i) => i.event === 'ACCESS_DENIED').length, 'critical', I.shield) +
+      kpiMini('Unique users today', new Set(todays.filter((i) => i.event === 'LOGIN_SUCCESS' || i.event === 'DATA_VIEW').map((i) => i.loginId)).size, 'data', I.users) + '</div>' +
+      '<div class="panel"><div class="toolbar"><div class="toolbar-row">' +
+      '<input type="text" id="a-login" placeholder="Filter by login ID" value="' + esc(A.actLogin) + '" style="max-width:220px">' +
+      '<select id="a-event" style="width:auto"><option value="">All events</option>' + ev.map((e) => '<option' + (A.actEvent === e ? ' selected' : '') + '>' + e + '</option>').join('') + '</select>' +
+      '<button class="btn btn-primary" id="a-apply">Apply</button><button class="btn" id="a-clear">Clear</button>' +
+      '<span class="result-meta">Latest ' + fmtN(items.length) + ' events</span></div></div>' +
+      (items.length ? '<div class="table-wrap"><table class="data"><thead><tr><th>Time</th><th>User</th><th>Event</th><th>Detail</th><th>Result</th></tr></thead><tbody>' +
+        items.map((i) => '<tr style="cursor:default"><td><div>' + esc(fmtDateTime(i.timestamp)) + '</div><div class="cell-sub">' + esc(timeAgo(i.timestamp)) + '</div></td>' +
+          '<td><div class="cell-strong">' + esc(i.displayName || i.loginId || '—') + '</div><div class="cell-sub">' + (i.loginId ? '@' + esc(i.loginId) : '') + (i.role ? ' · ' + esc(i.role) : '') + '</div></td>' +
+          '<td><span class="pill st-' + (EVENT_TONE[i.event] || 'neutral') + '"><span class="dot"></span>' + esc(i.event.replace(/_/g, ' ').toLowerCase()) + '</span></td>' +
+          '<td class="cell-max" style="max-width:380px" title="' + esc(i.detail) + '">' + esc(i.detail || '—') + '</td>' +
+          '<td>' + (i.result === 'ok' ? '<span class="tag">ok</span>' : '<span class="tag" style="color:var(--critical)">' + esc(i.result) + '</span>') + '</td></tr>').join('') +
+        '</tbody></table></div>' : emptyState('No activity found', 'Try clearing the filters.')) + '</div>';
+    $('#a-apply', c).addEventListener('click', () => { A.actLogin = $('#a-login', c).value.trim(); A.actEvent = $('#a-event', c).value; renderActivity(c, true); });
+    $('#a-login', c).addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#a-apply', c).click(); });
+    $('#a-clear', c).addEventListener('click', () => { A.actLogin = ''; A.actEvent = ''; renderActivity(c, true); });
+  }
+  function kpiMini(label, val, tone, icon) {
+    return '<div class="kpi tone-' + tone + '"><div class="kpi-label"><span class="kpi-ico">' + icon + '</span>' + esc(label) + '</div><div class="kpi-value num">' + fmtN(val) + '</div></div>';
+  }
+
+  /* --------------------------------------------------------- admin: system */
+  async function renderSystem(c) {
+    if (!isAdmin()) { c.innerHTML = emptyState('Not authorised', 'Administrator access is required.'); return; }
+    c.innerHTML = skeleton();
+    let sys;
+    try { sys = await call('getSystem'); } catch (err) { handleError(err); return; }
+    if (S.route !== 'system') return;
+    const P = sys.policy;
+    c.innerHTML = '<div class="grid-2-even">' +
+      '<div class="panel"><div class="panel-head"><div><h3>Data sources</h3><div class="sub">Read-only connection to the FMS spreadsheet</div></div></div><div class="panel-body"><dl class="kv">' +
+        sys.sources.map((s) => '<dt>' + esc(s.label) + '</dt><dd>Sheet <b>' + esc(s.sheet) + '</b> · rows from ' + esc(s.firstDataRow) + ' · columns A–O + ' + (s.key === 'o2d' ? 'CN' : 'CE') + ' · salesperson = column L</dd>').join('') +
+        '<dt>FMS spreadsheet</dt><dd><a href="' + esc(safeUrl(sys.fmsSheetUrl)) + '" target="_blank" rel="noopener noreferrer">Open FMS sheet ↗</a></dd>' +
+        '<dt>Auth database (private)</dt><dd><a href="' + esc(safeUrl(sys.authDbUrl)) + '" target="_blank" rel="noopener noreferrer">Open Auth DB ↗</a><div class="tiny muted">Never share this file. Hashes are useless without the server-side secret.</div></dd>' +
+        '<dt>Time zone</dt><dd>' + esc(sys.timeZone) + '</dd>' +
+        '<dt>Data cache</dt><dd>' + P.dataCacheSeconds + ' s server cache · clients auto-sync every ' + Math.round(P.clientSyncSeconds / 60) + ' min</dd></dl></div></div>' +
+      '<div class="panel"><div class="panel-head"><div><h3>Security policy</h3><div class="sub">Enforced on the server for every request</div></div></div><div class="panel-body"><dl class="kv">' +
+        '<dt>Session idle timeout</dt><dd>' + P.sessionIdleMinutes + ' minutes</dd>' +
+        '<dt>Maximum session length</dt><dd>' + P.sessionMaxHours + ' hours</dd>' +
+        '<dt>Brute-force lockout</dt><dd>' + P.maxFailedAttempts + ' failed attempts → locked ' + P.lockoutMinutes + ' min</dd>' +
+        '<dt>Password policy</dt><dd>Min ' + P.passwordMinLength + ' characters, letter + number; salted & peppered HMAC-SHA256</dd>' +
+        '<dt>Data isolation</dt><dd>Salesperson rows filtered server-side by column L before sending</dd>' +
+        '<dt>Accounts</dt><dd>' + sys.counts.users + ' total · ' + sys.counts.active + ' active · ' + sys.counts.admins + ' admin(s)</dd></dl></div></div></div>' +
+      '<div class="panel"><div class="panel-head"><div><h3>Maintenance</h3><div class="sub">Use when something looks out of date or a security incident is suspected</div></div></div><div class="panel-body" style="display:flex;gap:12px;flex-wrap:wrap">' +
+        '<button class="btn" id="s-cache">' + I.activity + 'Force data re-sync</button>' +
+        '<button class="btn btn-danger" id="s-all">' + I.shield + 'Sign out all users</button></div></div>';
+    $('#s-cache', c).addEventListener('click', async (e) => {
+      const b = e.currentTarget; setBusy(b, true, 'Clearing…');
+      try { await call('clearCache'); S.version = null; await syncNow(true); toast('Cache cleared and data re-synced.', 'success'); } catch (err) { handleError(err); }
+      setBusy(b, false);
+    });
+    $('#s-all', c).addEventListener('click', async () => {
+      if (!(await confirmBox('Sign out all users', 'Every active session — including yours — will be ended immediately.', 'Sign out everyone', true))) return;
+      try { await call('logoutAll'); endSession('All sessions were signed out. Please sign in again.'); } catch (err) { handleError(err); }
+    });
+  }
+
+  /* ----------------------------------------------------------------- theme */
+  function applyTheme(t) { if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t); else document.documentElement.removeAttribute('data-theme'); }
+  function toggleTheme() {
+    const cur = document.documentElement.getAttribute('data-theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    const next = cur === 'dark' ? 'light' : 'dark';
+    applyTheme(next); pref.set('fms.theme', next);
+  }
+
+  /* ------------------------------------------------------------------ init */
+  function initShell() {
+    $('#menu-btn').addEventListener('click', () => $('#view-app').classList.add('nav-open'));
+    $('#scrim').addEventListener('click', () => $('#view-app').classList.remove('nav-open'));
+    $('#refresh-btn').addEventListener('click', () => syncNow(false));
+    const ub = $('#user-btn'), um = $('#user-menu');
+    ub.addEventListener('click', (e) => { e.stopPropagation(); um.hidden = !um.hidden; ub.setAttribute('aria-expanded', String(!um.hidden)); });
+    document.addEventListener('click', (e) => { if (!um.hidden && !um.contains(e.target)) { um.hidden = true; ub.setAttribute('aria-expanded', 'false'); } });
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest('[data-action]');
+      if (!a) return;
+      um.hidden = true;
+      const act = a.getAttribute('data-action');
+      if (act === 'logout') logout();
+      else if (act === 'change-password') changePasswordModal();
+      else if (act === 'toggle-theme') toggleTheme();
+    });
+    window.addEventListener('hashchange', () => {
+      if (!S.user) return;
+      const r = (location.hash || '').replace(/^#\/?/, '');
+      S.route = routeAllowed(r) ? r : 'overview';
+      renderRoute();
+      window.scrollTo(0, 0);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { if (!$('#modal-host').hidden) closeModal(); else if (!$('#drawer-host').hidden) closeDrawer(); }
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && S.user && Date.now() - S.lastSync > S.settings.syncSeconds * 1000) syncNow(false);
+    });
+  }
+
+  async function boot() {
+    applyTheme(pref.get('fms.theme'));
+    initTooltip(); initAuth(); initShell();
+    const t = store.get(TOKEN_KEY);
+    if (!t) { showView('login'); return; }
+    S.token = t;
+    try {
+      const res = await call('me');
+      S.user = res.user; S.settings = Object.assign(S.settings, res.settings || {});
+      if (S.user.mustChange) showView('change'); else enterApp();
+    } catch (err) {
+      store.del(TOKEN_KEY); S.token = null;
+      showView('login');
+      if (err && err.code !== 'AUTH_REQUIRED') setAlert($('#login-alert'), err.error || 'Could not reach the server.');
+    }
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>

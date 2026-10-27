@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title><?= appName ?> · <?= appSubtitle ?></title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <?!= include_('Styles'); ?>
+</head>
+<body>
+  <!-- Boot splash -->
+  <div id="boot" class="boot">
+    <div class="boot-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c5 4 8 8.5 8 13.5A8 8 0 0 1 16 24.5a8 8 0 0 1-8-8C8 11.5 11 7 16 3Z" fill="currentColor" opacity=".9"/><path d="M16 10v19" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg></div>
+    <div class="boot-bar"><span></span></div>
+  </div>
+
+  <!-- ============================ LOGIN ============================ -->
+  <section id="view-login" class="auth" hidden>
+    <div class="auth-brand">
+      <div class="brand-row">
+        <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c5 4 8 8.5 8 13.5A8 8 0 0 1 16 24.5a8 8 0 0 1-8-8C8 11.5 11 7 16 3Z" fill="currentColor"/><path d="M16 10v19" stroke="#1d1813" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+        <span class="brand-name"><?= appName ?></span>
+      </div>
+      <div class="auth-hero">
+        <h1>Every order,<br>from form to doorstep.</h1>
+        <p>Your personal fulfilment dashboard — live order status, promise dates and delivery progress, synced from the FMS.</p>
+        <ul class="auth-points">
+          <li><span class="ico">●</span> Live sync with the FMS sheet</li>
+          <li><span class="ico">●</span> Only your own orders, enforced on the server</li>
+          <li><span class="ico">●</span> Overdue and due-soon alerts at a glance</li>
+        </ul>
+      </div>
+      <div class="auth-foot">© <span id="yr"></span> OakCraft · Secure access</div>
+    </div>
+    <div class="auth-panel">
+      <form id="login-form" class="auth-card" autocomplete="on" novalidate>
+        <div class="auth-card-head">
+          <span class="logo sm only-mobile"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c5 4 8 8.5 8 13.5A8 8 0 0 1 16 24.5a8 8 0 0 1-8-8C8 11.5 11 7 16 3Z" fill="currentColor"/><path d="M16 10v19" stroke="#1d1813" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+          <h2>Sign in</h2>
+          <p class="muted">Use the login ID and password given by your administrator.</p>
+        </div>
+        <div id="login-alert" class="alert" hidden></div>
+        <label class="field">
+          <span>Login ID</span>
+          <input id="login-id" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <div class="pw-wrap">
+            <input id="login-pw" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+            <button type="button" class="pw-toggle" data-toggle-pw="login-pw" aria-label="Show password">Show</button>
+          </div>
+        </label>
+        <button id="login-btn" type="submit" class="btn btn-primary btn-block btn-lg">Sign in</button>
+        <p class="tiny muted center">Forgot your password? Ask your administrator to reset it.</p>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===================== FORCED PASSWORD CHANGE ===================== -->
+  <section id="view-change" class="auth auth-solo" hidden>
+    <div class="auth-panel">
+      <form id="change-form" class="auth-card" novalidate>
+        <div class="auth-card-head">
+          <h2>Set a new password</h2>
+          <p class="muted">For your security, please replace the temporary password before continuing.</p>
+        </div>
+        <div id="change-alert" class="alert" hidden></div>
+        <label class="field"><span>Current (temporary) password</span>
+          <input id="cp-current" type="password" autocomplete="current-password" maxlength="128" required></label>
+        <label class="field"><span>New password</span>
+          <input id="cp-new" type="password" autocomplete="new-password" maxlength="128" required></label>
+        <div class="pw-meter"><span id="pw-meter-bar"></span></div>
+        <p class="tiny muted" id="pw-rules">At least 8 characters, including a letter and a number.</p>
+        <label class="field"><span>Confirm new password</span>
+          <input id="cp-confirm" type="password" autocomplete="new-password" maxlength="128" required></label>
+        <button type="submit" id="cp-btn" class="btn btn-primary btn-block btn-lg">Update password</button>
+        <button type="button" class="btn btn-ghost btn-block" data-action="logout">Sign out</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============================ APP SHELL ============================ -->
+  <div id="view-app" class="shell" hidden>
+    <aside class="sidebar" id="sidebar">
+      <div class="side-brand">
+        <span class="logo"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c5 4 8 8.5 8 13.5A8 8 0 0 1 16 24.5a8 8 0 0 1-8-8C8 11.5 11 7 16 3Z" fill="currentColor"/><path d="M16 10v19" stroke="#1d1813" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+        <div><div class="brand-name"><?= appName ?></div><div class="brand-sub"><?= appSubtitle ?></div></div>
+      </div>
+      <nav class="nav" id="nav"></nav>
+      <div class="side-foot">
+        <div class="side-user">
+          <div class="avatar" id="side-avatar">?</div>
+          <div class="side-user-meta"><div id="side-name" class="ellipsis"></div><div id="side-role" class="tiny"></div></div>
+        </div>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn only-mobile" id="menu-btn" aria-label="Open menu">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <div class="topbar-title">
+          <h1 id="page-title">Overview</h1>
+          <div id="page-sub" class="muted small"></div>
+        </div>
+        <div class="topbar-actions">
+          <div class="sync" id="sync" title="Data synchronisation status">
+            <span class="sync-dot"></span><span id="sync-text">Syncing…</span>
+          </div>
+          <button class="icon-btn" id="refresh-btn" aria-label="Refresh data" title="Refresh now">
+            <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="menu-wrap">
+            <button class="user-chip" id="user-btn" aria-haspopup="true" aria-expanded="false">
+              <span class="avatar sm" id="top-avatar">?</span><span class="hide-sm" id="top-name"></span>
+              <svg viewBox="0 0 24 24" class="chev"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+            <div class="menu" id="user-menu" hidden>
+              <div class="menu-head"><div id="menu-name" class="strong"></div><div id="menu-sub" class="tiny muted"></div></div>
+              <button data-action="change-password">Change password</button>
+              <button data-action="toggle-theme">Toggle dark mode</button>
+              <hr>
+              <button data-action="logout" class="danger">Sign out</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div class="content" id="content" tabindex="-1"></div>
+    </main>
+  </div>
+
+  <!-- Modal + drawer + toast hosts -->
+  <div class="modal-host" id="modal-host" hidden></div>
+  <div class="drawer-host" id="drawer-host" hidden></div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+
+  <?!= include_('App'); ?>
+</body>
+</html>
