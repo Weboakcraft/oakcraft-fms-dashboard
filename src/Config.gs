@@ -71,7 +71,7 @@ const CONFIG = Object.freeze({
     SESSION_MAX_HOURS: 12,           // absolute lifetime of a session
     MAX_FAILED_ATTEMPTS: 5,          // per login ID …
     LOCKOUT_MINUTES: 15,             // … then locked for this long
-    HASH_ITERATIONS: 1200,           // HMAC-SHA256 key-stretching rounds (stored per hash)
+    HASH_ITERATIONS: 100,            // HMAC-SHA256 rounds (+ secret pepper); kept low for fast sign-in on Apps Script
     PASSWORD_MIN_LENGTH: 8
   },
 

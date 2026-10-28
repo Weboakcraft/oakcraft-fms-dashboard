@@ -346,10 +346,15 @@
   }
 
   function go(route) {
+    // Apps Script serves the app inside a sandboxed iframe: never navigate the
+    // window. Render in place and only mirror the route into the hash.
     if (!routeAllowed(route)) route = 'overview';
-    if (location.hash !== '#/' + route) location.hash = '#/' + route;
-    else { S.route = route; renderRoute(); }
+    S.route = route;
+    renderRoute();
+    try { history.replaceState(null, '', '#/' + route); } catch (e) { /* sandbox may block; routing still works */ }
+    window.scrollTo(0, 0);
   }
+
 
   function renderRoute() {
     $$('#nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('data-route') === S.route));
@@ -827,7 +832,7 @@
       '</dl>' +
       '<div class="section-title">Customer</div><dl class="dl">' +
         '<div><dt>' + label(4, 'Customer') + '</dt><dd>' + esc(r.customer || '—') + '</dd></div>' +
-        '<div><dt>' + label(5, 'Contact') + '</dt><dd>' + (r.contact ? '<a href="tel:' + esc(String(r.contact).replace(/[^0-9+]/g, '')) + '">' + esc(r.contact) + '</a>' : '—') + '</dd></div>' +
+        '<div><dt>' + label(5, 'Contact') + '</dt><dd>' + (r.contact ? '<a target="_top" href="tel:' + esc(String(r.contact).replace(/[^0-9+]/g, '')) + '">' + esc(r.contact) + '</a>' : '—') + '</dd></div>' +
         '<div><dt>' + label(6, 'City') + '</dt><dd>' + esc(r.city || '—') + '</dd></div>' +
         '<div><dt>' + label(11, 'Salesperson') + '</dt><dd>' + esc(r.salesperson || '—') + '</dd></div>' +
       '</dl>' +
@@ -1220,6 +1225,12 @@
       if (act === 'logout') logout();
       else if (act === 'change-password') changePasswordModal();
       else if (act === 'toggle-theme') toggleTheme();
+    });
+    $('#nav').addEventListener('click', (e) => {
+      const a = e.target.closest('a[data-route]');
+      if (!a) return;
+      e.preventDefault();
+      go(a.getAttribute('data-route'));
     });
     window.addEventListener('hashchange', () => {
       if (!S.user) return;

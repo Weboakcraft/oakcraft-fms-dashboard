@@ -107,3 +107,49 @@ function emergencyResetAdmin() {
     console.log('Admin login ID: admin   Temporary password: ' + password);
   });
 }
+
+/**
+ * Create / update the owner's personal administrator account.
+ * The password is NEVER written in code: set Script Property
+ * OWNER_ADMIN_PASSWORD (Project Settings ▸ Script properties), then Run this.
+ * The property is deleted immediately after use. Also deactivates the
+ * default "admin" account. Without the property this function does nothing.
+ */
+function createOwnerAdmin() {
+  const LOGIN = 'mrgoswami06';
+  const NAME = 'Ankush Goswami';
+  const props = props_();
+  const pw = props.getProperty('OWNER_ADMIN_PASSWORD');
+  if (!pw) { console.log('Add Script Property OWNER_ADMIN_PASSWORD first, then run again.'); return; }
+  props.deleteProperty('OWNER_ADMIN_PASSWORD'); // single use, never stays stored
+  validatePassword_(pw);
+  withLock_(function () {
+    const users = readUsersFresh_();
+    let u = users.filter(function (x) { return x.loginId === LOGIN; })[0];
+    if (!u) {
+      u = {
+        userId: 'U' + Date.now().toString(36).toUpperCase() + randomHex_(3).toUpperCase(),
+        loginId: LOGIN, permissions: { o2d: true, tbo: true, export: true }, sessionVersion: 1,
+        createdAt: nowIso_(), createdBy: 'owner-setup', lastLoginAt: '', lastSeenAt: ''
+      };
+    }
+    u.displayName = NAME;
+    u.role = 'admin';
+    u.salesperson = '';
+    u.status = 'active';
+    u.passwordHash = makePasswordHash_(pw);
+    u.mustChange = false;
+    u.sessionVersion = (Number(u.sessionVersion) || 1) + 1;
+    saveUser_(u);
+    clearFailures_(LOGIN);
+
+    const def = users.filter(function (x) { return x.loginId === 'admin'; })[0];
+    if (def && def.status === 'active') {
+      def.status = 'inactive';
+      def.sessionVersion = (Number(def.sessionVersion) || 1) + 1;
+      saveUser_(def);
+    }
+    logActivity_(u, 'OWNER_ADMIN_SET', 'Owner admin account set; default admin deactivated', 'ok');
+    console.log('Administrator "' + LOGIN + '" (' + NAME + ') is ready. Default "admin" account deactivated.');
+  });
+}
