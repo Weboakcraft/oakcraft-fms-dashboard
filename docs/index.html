@@ -9,7 +9,7 @@
   <title>OakCraft FMS · Fulfilment Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
   <style>
 :root {
   color-scheme: light;
@@ -933,7 +933,25 @@ table.data td.n, table.data th.n { text-align: right; font-variant-numeric: tabu
   function startSession(res) {
     S.token = res.token; store.set(TOKEN_KEY, res.token);
     S.user = res.user; S.settings = Object.assign(S.settings, res.settings || {});
-    if (S.user.mustChange) showView('change'); else enterApp();
+    if (S.user.mustChange) { showView('change'); return; }
+    if (res.data) applyData(res.data);
+    enterApp(!!res.data);
+  }
+
+  /* Per-tab cache of the user's own (already server-scoped) data so a reload
+     paints instantly; cleared on sign-out and when the tab is closed. */
+  const CACHE_KEY = 'fms.cache';
+  function saveCache() {
+    try { if (S.user && S.data) store.set(CACHE_KEY, JSON.stringify({ uid: S.user.userId, user: S.user, settings: S.settings, data: S.data })); }
+    catch (e) { /* quota – ignore */ }
+  }
+  function readCache() { try { return JSON.parse(store.get(CACHE_KEY) || 'null'); } catch (e) { return null; } }
+
+  function applyData(res) {
+    prepareData(res);
+    S.data = res; S.version = res.version; S.lastSync = Date.now();
+    if (S.spFilter && (!res.salespersons || res.salespersons.indexOf(S.spFilter) < 0)) S.spFilter = '';
+    saveCache();
   }
 
   async function logout() {
@@ -945,7 +963,7 @@ table.data td.n, table.data th.n { text-align: right; font-variant-numeric: tabu
     stopSync();
     S.token = null; S.user = null; S.data = null; S.version = null; S.tables = {}; S.spFilter = '';
     S.admin = { users: null, salespersons: [], userQ: '', userRole: '', userStatus: '', activity: null, actLogin: '', actEvent: '' };
-    store.del(TOKEN_KEY);
+    store.del(TOKEN_KEY); store.del(CACHE_KEY);
     closeModal(); closeDrawer();
     $('#content').innerHTML = '';
     showView('login');
@@ -953,7 +971,7 @@ table.data td.n, table.data th.n { text-align: right; font-variant-numeric: tabu
   }
 
   /* ------------------------------------------------------------ app shell */
-  function enterApp() {
+  function enterApp(haveData) {
     showView('app');
     const u = S.user;
     $('#side-avatar').textContent = initials(u.displayName);
@@ -966,7 +984,7 @@ table.data td.n, table.data th.n { text-align: right; font-variant-numeric: tabu
     buildNav();
     S.route = 'overview';
     renderRoute();
-    syncNow(true);
+    if (haveData) { updateNavBadges(); setSync('ok', 'Live · ' + timeAgo(S.lastSync)); } else syncNow(true);
     startSync();
   }
 
@@ -1055,9 +1073,7 @@ table.data td.n, table.data th.n { text-align: right; font-variant-numeric: tabu
       if (res.unchanged) {
         S.data.syncedAt = res.syncedAt;
       } else {
-        prepareData(res);
-        S.data = res; S.version = res.version;
-        if (S.spFilter && (!res.salespersons || res.salespersons.indexOf(S.spFilter) < 0)) S.spFilter = '';
+        applyData(res);
         updateNavBadges();
         const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('.toolbar');
         if ((S.route === 'o2d' || S.route === 'tbo') && typing) renderTableResults(S.route, columns(S.route)); // keep focus while typing
@@ -1920,14 +1936,32 @@ table.data td.n, table.data th.n { text-align: right; font-variant-numeric: tabu
     applyTheme(pref.get('fms.theme'));
     initTooltip(); initAuth(); initShell();
     const t = store.get(TOKEN_KEY);
-    if (!t) { showView('login'); return; }
+    if (!t) { showView('login'); call('ping').catch(() => {}); return; }
     S.token = t;
+    // Paint instantly from this tab's cache, then verify + refresh with the server.
+    const cached = readCache();
+    if (cached && cached.user && cached.data && !cached.user.mustChange) {
+      S.user = cached.user; S.settings = Object.assign(S.settings, cached.settings || {});
+      prepareData(cached.data); S.data = cached.data; S.version = cached.data.version; S.lastSync = 0;
+      enterApp(true);
+      setSync('busy', 'Refreshing…');
+    }
     try {
-      const res = await call('me');
+      const res = await call('me', { withData: true });
+      const sameUser = S.user && S.user.userId === res.user.userId && S.user.role === res.user.role && JSON.stringify(S.user.permissions) === JSON.stringify(res.user.permissions);
       S.user = res.user; S.settings = Object.assign(S.settings, res.settings || {});
-      if (S.user.mustChange) showView('change'); else enterApp();
+      if (S.user.mustChange) { showView('change'); return; }
+      const d = res.data && !res.data.unchanged ? res.data : null;
+      if (d) applyData(d);
+      if (cached && sameUser && !$('#view-app').hidden) {
+        updateNavBadges(); setSync('ok', 'Live · ' + timeAgo(S.lastSync));
+        if (['overview', 'o2d', 'tbo'].indexOf(S.route) >= 0) renderRoute();
+      } else {
+        enterApp(!!d);
+      }
     } catch (err) {
-      store.del(TOKEN_KEY); S.token = null;
+      if (cached && err && err.code === 'NETWORK') { setSync('err', 'Offline – showing last data'); return; }
+      store.del(TOKEN_KEY); store.del(CACHE_KEY); S.token = null; S.user = null; S.data = null; stopSync();
       showView('login');
       if (err && err.code !== 'AUTH_REQUIRED') setAlert($('#login-alert'), err.error || 'Could not reach the server.');
     }
