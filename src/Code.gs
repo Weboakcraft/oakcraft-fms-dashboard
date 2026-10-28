@@ -114,7 +114,15 @@ function apiLogout_(ctx) {
 }
 
 function apiGetData_(ctx, p) {
-  const view = buildScopedView_(ctx.user, false);
+  // Manual refresh (force) reads the sheet directly, bypassing the 30-second
+  // shared cache. Rate-limited per user so it can't hammer the spreadsheet.
+  let force = false;
+  if (p && p.force === true) {
+    const cache = CacheService.getScriptCache();
+    const k = 'force:' + ctx.user.userId;
+    if (!cache.get(k)) { cache.put(k, '1', 10); force = true; }
+  }
+  const view = buildScopedView_(ctx.user, force);
   if (!ctx.session.viewed) {
     ctx.session.viewed = true;
     saveSession_(ctx);

@@ -76,9 +76,9 @@ const CONFIG = Object.freeze({
   },
 
   /** Server-side cache of parsed sheet data (seconds). */
-  DATA_CACHE_SECONDS: 60,
+  DATA_CACHE_SECONDS: 30,
   /** Client auto-sync interval (seconds). */
-  CLIENT_SYNC_SECONDS: 120,
+  CLIENT_SYNC_SECONDS: 60,
   /** Keep at most this many rows in the activity log. */
   ACTIVITY_LOG_MAX_ROWS: 20000,
 

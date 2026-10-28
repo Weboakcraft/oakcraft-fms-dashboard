@@ -393,13 +393,13 @@
   }
 
   /* ----------------------------------------------------------------- sync */
-  async function syncNow(initial) {
+  async function syncNow(initial, force) {
     if (S.syncing || !S.token) return;
     S.syncing = true;
     setSync('busy', 'Syncing…');
     $('#refresh-btn').classList.add('spinning');
     try {
-      const res = await call('getData', { since: initial ? '' : (S.version || '') });
+      const res = await call('getData', { since: initial ? '' : (S.version || ''), force: !!force });
       S.lastSync = Date.now();
       if (res.unchanged) {
         S.data.syncedAt = res.syncedAt;
@@ -408,9 +408,11 @@
         S.data = res; S.version = res.version;
         if (S.spFilter && (!res.salespersons || res.salespersons.indexOf(S.spFilter) < 0)) S.spFilter = '';
         updateNavBadges();
-        if (['overview', 'o2d', 'tbo'].indexOf(S.route) >= 0) renderRoute();
+        const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('.toolbar');
+        if ((S.route === 'o2d' || S.route === 'tbo') && typing) renderTableResults(S.route, columns(S.route)); // keep focus while typing
+        else if (['overview', 'o2d', 'tbo'].indexOf(S.route) >= 0) renderRoute();
       }
-      setSync('ok', 'Synced ' + timeAgo(S.lastSync));
+      setSync('ok', 'Live · ' + timeAgo(S.lastSync));
     } catch (err) {
       setSync('err', 'Sync failed');
       handleError(err, { silent: !initial });
@@ -432,12 +434,12 @@
     el.classList.toggle('busy', state === 'busy');
     el.classList.toggle('err', state === 'err');
     $('#sync-text').textContent = text;
-    el.setAttribute('data-tip', S.data ? 'Sheet data as of ' + fmtDateTime(S.data.syncedAt) + '\nAuto-refresh every ' + Math.round(S.settings.syncSeconds / 60) + ' min' : 'Loading data');
+    el.setAttribute('data-tip', S.data ? 'Sheet data as of ' + fmtDateTime(S.data.syncedAt) + '\nAuto-refresh every ' + S.settings.syncSeconds + ' s · click ⟳ for an instant refresh' : 'Loading data');
   }
   function startSync() {
     stopSync();
     S.syncTimer = setInterval(() => { if (!document.hidden) syncNow(false); }, Math.max(30, S.settings.syncSeconds) * 1000);
-    S.tickTimer = setInterval(() => { if (S.lastSync && !S.syncing) setSync('ok', 'Synced ' + timeAgo(S.lastSync)); }, 30000);
+    S.tickTimer = setInterval(() => { if (S.lastSync && !S.syncing) setSync('ok', 'Live · ' + timeAgo(S.lastSync)); }, 15000);
   }
   function stopSync() { clearInterval(S.syncTimer); clearInterval(S.tickTimer); S.syncTimer = S.tickTimer = null; }
 
@@ -1231,7 +1233,7 @@
   function initShell() {
     $('#menu-btn').addEventListener('click', () => $('#view-app').classList.add('nav-open'));
     $('#scrim').addEventListener('click', () => $('#view-app').classList.remove('nav-open'));
-    $('#refresh-btn').addEventListener('click', () => syncNow(false));
+    $('#refresh-btn').addEventListener('click', () => syncNow(false, true));
     const ub = $('#user-btn'), um = $('#user-menu');
     ub.addEventListener('click', (e) => { e.stopPropagation(); um.hidden = !um.hidden; ub.setAttribute('aria-expanded', String(!um.hidden)); });
     document.addEventListener('click', (e) => { if (!um.hidden && !um.contains(e.target)) { um.hidden = true; ub.setAttribute('aria-expanded', 'false'); } });
