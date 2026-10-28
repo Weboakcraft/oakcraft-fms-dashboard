@@ -28,7 +28,7 @@ A script attached to the sheet can be opened by *anyone who can edit the sheet* 
 | Seeing another salesperson's data | Rows are filtered **on the server** by column L before anything is sent. Client filters can't widen it (tested). |
 | Calling the API directly / editing JS / changing URL | Every request carries a session token that is validated server-side; role & scope come from the server-side user record, never from the request. Admin actions are re-checked on the server and logged as `ACCESS_DENIED` if attempted. |
 | Calling internal Apps Script functions from the browser | All internal functions end with `_` (Apps Script makes these uncallable). Only `doGet`, `api`, `initialSetup`, `emergencyResetAdmin` are public; the last two return nothing. |
-| Password theft from the sheet | Passwords stored as salt + secret pepper (Script Properties) + 1,200-round HMAC-SHA256. Plain passwords are never stored. |
+| Password theft from the sheet | Passwords stored as salt + secret pepper (Script Properties) + iterated HMAC-SHA256. Plain passwords are never stored. |
 | Brute force | 5 failed attempts → login ID locked 15 minutes. Generic error messages. |
 | Stolen / stale sessions | 256-bit random tokens, only their hash is stored; 60-min idle timeout, 12-h max; tokens die on logout, password change/reset, deactivation, role/salesperson change, “force sign-out”, or “sign out all users”. |
 | XSS / injection | All sheet values are HTML-escaped before display; image links restricted to `https://`; formula-injection guard on values written to sheets and on CSV export. Click-jacking blocked. |
@@ -118,7 +118,7 @@ Edit the files, then **Deploy → Manage deployments → ✎ (edit) → Version:
 | `SESSION_IDLE_MINUTES` | 60 |
 | `SESSION_MAX_HOURS` | 12 |
 | `MAX_FAILED_ATTEMPTS` / `LOCKOUT_MINUTES` | 5 / 15 |
-| `HASH_ITERATIONS` | 1200 (raise if sign-in stays under ~1 s; existing hashes keep working) |
+| `HASH_ITERATIONS` | 100 (Apps Script is slow at hashing; existing hashes keep working) |
 | `DATA_CACHE_SECONDS` / `CLIENT_SYNC_SECONDS` | 60 / 120 |
 | `SOURCES.*.statusCol` | 92 (CN) / 83 (CE) — change if columns move |
 
@@ -138,3 +138,13 @@ Project Settings → Script properties → add `ALLOW_RECOVERY` = `true` → run
 ```
 cd test && node security.test.js && node ui.test.js
 ```
+
+---
+
+## GitHub Pages version (second link)
+
+The same dashboard is also published at **https://weboakcraft.github.io/oakcraft-fms-dashboard/**.
+
+* `docs/index.html` is generated from `src/` by `node tools/build-pages.js` (it inlines Styles/App and swaps `google.script.run` for `fetch()` calls to the Apps Script web app's `doPost()` endpoint).
+* All login, salesperson filtering and permissions still run in Apps Script — GitHub only hosts the static page. Both links use the same accounts and data.
+* After changing anything in `src/`: update Apps Script + deploy a new version (same URL), then rebuild `docs/index.html` and commit it. If the Apps Script web-app URL ever changes, rebuild with `API_URL=<new exec URL> node tools/build-pages.js`.
