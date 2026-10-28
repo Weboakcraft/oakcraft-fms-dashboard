@@ -15,6 +15,16 @@ function doGet() {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT); // block click-jacking
 }
 
+/**
+ * JSON endpoint for the GitHub Pages front-end (same API, same auth).
+ * The page POSTs the request as text/plain (a CORS "simple request"), and we
+ * return exactly what api() returns. No data is served without a valid token.
+ */
+function doPost(e) {
+  const body = (e && e.postData && typeof e.postData.contents === 'string') ? e.postData.contents : '';
+  return ContentService.createTextOutput(api(body)).setMimeType(ContentService.MimeType.JSON);
+}
+
 /** Template helper: inline another HTML file. */
 function include_(name) {
   return HtmlService.createHtmlOutputFromFile(name).getContent();
@@ -62,7 +72,8 @@ function api(requestJson) {
   let action = '';
   try {
     if (typeof requestJson !== 'string' || requestJson.length > 20000) throw appError_('BAD_REQUEST', 'Invalid request.');
-    const req = JSON.parse(requestJson);
+    let req;
+    try { req = JSON.parse(requestJson); } catch (pe) { throw appError_('BAD_REQUEST', 'Invalid request.'); }
     action = String(req && req.action || '');
     const ROUTES = routes_();
     if (!Object.prototype.hasOwnProperty.call(ROUTES, action)) throw appError_('BAD_REQUEST', 'Unknown action.');
