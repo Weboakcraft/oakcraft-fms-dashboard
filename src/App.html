@@ -285,7 +285,6 @@
     S.admin = { users: null, salespersons: [], userQ: '', userRole: '', userStatus: '', activity: null, actLogin: '', actEvent: '' };
     store.del(TOKEN_KEY);
     closeModal(); closeDrawer();
-    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { location.hash = ''; }
     $('#content').innerHTML = '';
     showView('login');
     if (msg) setAlert($('#login-alert'), msg, type || 'info');
@@ -303,8 +302,7 @@
     $('#menu-name').textContent = u.displayName;
     $('#menu-sub').textContent = '@' + u.loginId + ' · ' + u.role;
     buildNav();
-    const fromHash = (location.hash || '').replace(/^#\/?/, '');
-    S.route = routeAllowed(fromHash) ? fromHash : 'overview';
+    S.route = 'overview';
     renderRoute();
     syncNow(true);
     startSync();
@@ -328,7 +326,7 @@
   function buildNav() {
     $('#nav').innerHTML = navItems().map((i) => i.section
       ? '<div class="nav-section">' + esc(i.section) + '</div>'
-      : '<a href="#/' + i.id + '" data-route="' + i.id + '">' + i.icon + '<span>' + esc(i.label) + '</span>' +
+      : '<a role="button" tabindex="0" data-route="' + i.id + '">' + i.icon + '<span>' + esc(i.label) + '</span>' +
         (i.badge ? '<span class="badge" data-badge="' + i.badge + '"></span>' : '') + '</a>').join('');
     updateNavBadges();
   }
@@ -351,7 +349,6 @@
     if (!routeAllowed(route)) route = 'overview';
     S.route = route;
     renderRoute();
-    try { history.replaceState(null, '', '#/' + route); } catch (e) { /* sandbox may block; routing still works */ }
     window.scrollTo(0, 0);
   }
 
@@ -1226,19 +1223,17 @@
       else if (act === 'change-password') changePasswordModal();
       else if (act === 'toggle-theme') toggleTheme();
     });
-    $('#nav').addEventListener('click', (e) => {
-      const a = e.target.closest('a[data-route]');
+    // Nav items have no href at all: inside the Apps Script sandbox iframe any
+    // link navigation would replace the whole page. Routing is purely in-memory.
+    const navGo = (e) => {
+      const a = e.target.closest('[data-route]');
       if (!a) return;
       e.preventDefault();
+      e.stopPropagation();
       go(a.getAttribute('data-route'));
-    });
-    window.addEventListener('hashchange', () => {
-      if (!S.user) return;
-      const r = (location.hash || '').replace(/^#\/?/, '');
-      S.route = routeAllowed(r) ? r : 'overview';
-      renderRoute();
-      window.scrollTo(0, 0);
-    });
+    };
+    $('#nav').addEventListener('click', navGo, true);
+    $('#nav').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') navGo(e); }, true);
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { if (!$('#modal-host').hidden) closeModal(); else if (!$('#drawer-host').hidden) closeDrawer(); }
     });
