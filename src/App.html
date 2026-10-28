@@ -485,7 +485,7 @@
     const split = (fn) => [hasO2d ? 'O2D ' + fmtN(fn(o2d)) : '', hasTbo ? 'TBO ' + fmtN(fn(tbo)) : ''].filter(Boolean).join(' · ');
 
     const kpis = [
-      { label: 'Total Orders', value: fmtN(uniqueOrders(rows)), sub: fmtN(rows.length) + ' line items', icon: I.box, tone: 'accent' },
+      { label: 'Total Order Rows', value: fmtN(rows.length), sub: split((x) => x.length) + ' · ' + fmtN(uniqueOrders(rows)) + ' IDs', icon: I.box, tone: 'accent' },
       { label: 'Units Ordered', value: fmtN(sumQty(rows)), sub: split(sumQty), icon: I.layers, tone: 'data' },
       { label: 'Open Items', value: fmtN(open.length), sub: fmtN(sumQty(open)) + ' units in progress', icon: I.clock, tone: 'warn', go: 'open' },
       { label: 'Delivered', value: fmtN(done.length), sub: pct(done.length, rows.length) + '% of all items', icon: I.check, tone: 'good', go: 'delivered' },
