@@ -42,9 +42,14 @@ function routes_() {
   // Built lazily: Apps Script loads files in order, so referencing functions
   // from other files at top level could fail.
   return {
+  ping:           { auth: 'public', fn: function () { return { pong: true }; } }, // warms up the server while the login page is shown
   login:          { auth: 'public', fn: function (ctx, p) { return login_(p); } },
   logout:         { auth: 'user',  allowMustChange: true, fn: apiLogout_ },
-  me:             { auth: 'user',  allowMustChange: true, fn: function (ctx) { return { user: publicUser_(ctx.user), settings: clientSettings_() }; } },
+  me:             { auth: 'user',  allowMustChange: true, fn: function (ctx, p) {
+    const out = { user: publicUser_(ctx.user), settings: clientSettings_() };
+    if (p && p.withData === true && !ctx.user.mustChange) out.data = apiGetData_(ctx, {}); // one round trip on page load
+    return out;
+  } },
   changePassword: { auth: 'user',  allowMustChange: true, fn: changePassword_ },
   getData:        { auth: 'user',  fn: apiGetData_ },
   logEvent:       { auth: 'user',  fn: apiLogEvent_ },

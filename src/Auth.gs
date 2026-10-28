@@ -72,10 +72,10 @@ function sessionEpoch_() {
   return props_().getProperty(PROP.SESSION_EPOCH) || '1';
 }
 
-function createSession_(user) {
+function createSession_(user, viewed) {
   const token = randomHex_(32);
   const now = Date.now();
-  const sess = { uid: user.userId, ver: user.sessionVersion, epoch: sessionEpoch_(), iat: now, lat: now, viewed: false };
+  const sess = { uid: user.userId, ver: user.sessionVersion, epoch: sessionEpoch_(), iat: now, lat: now, viewed: !!viewed };
   CacheService.getScriptCache().put('sess:' + sha256Hex_(token), JSON.stringify(sess), CONFIG.AUTH.SESSION_IDLE_MINUTES * 60);
   return token;
 }
@@ -153,13 +153,17 @@ function login_(payload) {
   }
 
   clearFailures_(rawId);
-  const token = createSession_(user);
-  withLock_(function () {
-    const fresh = findUserById_(user.userId, true);
-    if (fresh) { fresh.lastLoginAt = nowIso_(); fresh.lastSeenAt = fresh.lastLoginAt; saveUser_(fresh); }
-  });
-  logActivity_(user, 'LOGIN_SUCCESS', '', 'ok');
-  return { token: token, user: publicUser_(user), settings: clientSettings_() };
+  // Send the user's (server-scoped) data in the same response: saves a full
+  // round trip to Apps Script, which is the main source of latency.
+  let data = null;
+  if (!user.mustChange) {
+    try { data = buildScopedView_(user, false); } catch (e) { data = null; }
+  }
+  const token = createSession_(user, !!data);
+  stampLogin_(user);
+  const counts = data ? ' — ' + Object.keys(data.sources).map(function (k) { return k + ':' + data.sources[k].rows.length; }).join(', ') : '';
+  logActivity_(user, 'LOGIN_SUCCESS', (data ? (data.scope.type === 'all' ? 'All salespersons' : data.scope.salesperson) : '') + counts, 'ok');
+  return { token: token, user: publicUser_(user), settings: clientSettings_(), data: data };
 }
 
 function clientSettings_() {

@@ -144,6 +144,25 @@ function deleteUserRow_(userId) {
   return false;
 }
 
+/** Fast last-login stamp: two-cell write at the cached row, verified by userId (no full-sheet rewrite). */
+function stampLogin_(user) {
+  try {
+    const sh = usersSheet_();
+    let row = Number(user._row) || 0;
+    if (!row || String(sh.getRange(row, 1).getValue()) !== String(user.userId)) {
+      const fresh = findUserById_(user.userId, true);
+      row = fresh ? fresh._row : 0;
+    }
+    if (!row) return;
+    const now = nowIso_();
+    const c = USER_COLS_.indexOf('lastLoginAt') + 1;
+    sh.getRange(row, c, 1, 2).setValues([[now, now]]); // lastLoginAt, lastSeenAt are adjacent
+    CacheService.getScriptCache().put('seen:' + user.userId, '1', 300);
+  } catch (e) {
+    console.warn('stampLogin_ failed: ' + e);
+  }
+}
+
 /** Throttled "last seen" stamp (at most once per 5 minutes per user). */
 function touchLastSeen_(user) {
   const cache = CacheService.getScriptCache();
