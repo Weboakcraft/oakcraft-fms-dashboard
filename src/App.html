@@ -110,6 +110,17 @@
   const toneVar = (t) => 'var(--' + ({ info: 'info', aqua: 'aqua', good: 'good', warn: 'warn', serious: 'serious', critical: 'critical', neutral: 'neutral', violet: 'violet' }[t] || 'neutral') + ')';
   const pill = (s) => '<span class="pill st-' + statusMeta(s).tone + '"><span class="dot"></span>' + esc(s) + '</span>';
   const isOpen = (r) => !r.isDone && !r.isCancelled;
+  const NO_OS = 'Not Set';
+  const osLabel = (s) => (String(s || '').trim() || NO_OS);
+  function osTone(s) {
+    const u = String(s || '').toUpperCase();
+    if (!u) return 'neutral';
+    if (/APPROV|CONFIRM/.test(u)) return 'good';
+    if (/REJECT|CANCEL/.test(u)) return 'critical';
+    if (/PEND|HOLD|WAIT|REVIEW/.test(u)) return 'warn';
+    return 'violet';
+  }
+  const osPill = (s) => '<span class="pill st-' + osTone(s) + '"><span class="dot"></span>' + esc(osLabel(s)) + '</span>';
 
   /* ------------------------------------------------------------------ API */
   function call(action, payload) {
@@ -412,7 +423,7 @@
     Object.keys(d.sources).forEach((k) => {
       d.sources[k].rows.forEach((r, i) => {
         r._src = k; r._i = i;
-        r._q = [r.orderId, r.customer, r.contact, r.city, r.item, r.orderType, r.productType, r.transport, r.salesperson, r.status].join(' ').toLowerCase();
+        r._q = [r.orderId, r.customer, r.contact, r.city, r.item, r.orderType, r.productType, r.transport, r.salesperson, r.status, r.orderStatus].join(' ').toLowerCase();
       });
     });
   }
@@ -515,13 +526,18 @@
       '<div class="kpi-value num' + (k.hot ? ' hot' : '') + '">' + k.value + '</div><div class="kpi-sub">' + esc(k.sub) + '</div></div>').join('') + '</div>';
 
     html += '<div class="grid-2">';
-    html += '<div class="panel"><div class="panel-head"><div><h3>Status breakdown</h3><div class="sub">Line items by current FMS status</div></div></div><div class="panel-body">' +
+    html += '<div class="panel"><div class="panel-head"><div><h3>Final status breakdown</h3><div class="sub">Line items by current fulfilment status (CN / CE)</div></div></div><div class="panel-body">' +
       (statuses.length ? '<div class="hbars">' + statuses.map((s) => {
         const n = byStatus[s];
         return '<div class="hbar" data-tip="' + esc(s + '\n' + fmtN(n) + ' items · ' + pct(n, rows.length) + '%') + '"><div class="hbar-label"><span class="sw" style="background:' + toneVar(statusMeta(s).tone) + '"></span><span class="ellipsis">' + esc(s) + '</span></div>' +
           '<div class="hbar-track"><div class="hbar-fill" style="width:' + (n / maxS) * 100 + '%;background:' + toneVar(statusMeta(s).tone) + '"></div></div>' +
           '<div class="hbar-val">' + fmtN(n) + '<small>' + pct(n, rows.length) + '%</small></div></div>';
       }).join('') + '</div>' : emptyState('No orders yet', 'Orders will appear here as soon as they are added to the FMS.')) +
+      (rows.length ? '<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)"><div class="section-title" style="margin-bottom:10px">Order status (column O)</div><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        Object.entries(rows.reduce((m, r) => { const k = osLabel(r.orderStatus); m[k] = (m[k] || 0) + 1; return m; }, {}))
+          .sort((x, y) => y[1] - x[1])
+          .map(([k, n]) => '<span class="pill st-' + osTone(k === NO_OS ? '' : k) + '" data-tip="' + esc(k + '\n' + fmtN(n) + ' items · ' + pct(n, rows.length) + '%') + '"><span class="dot"></span>' + esc(k) + ' · ' + fmtN(n) + '</span>').join('') +
+        '</div></div>' : '') +
       '</div></div>';
     html += '<div class="panel"><div class="panel-head"><div><h3>Orders per month</h3><div class="sub">Unique orders by order date · last 6 months</div></div></div><div class="panel-body">' +
       '<div class="vbars">' + months.map((m, i) => '<div class="vbar" data-tip="' + esc(monthLabel(m) + '\n' + fmtN(mVals[i]) + ' orders · ' + fmtN(mQty[m] || 0) + ' units') + '"><div class="vbar-num">' + (mVals[i] ? fmtN(mVals[i]) : '') + '</div><div class="vbar-col" style="height:' + (mVals[i] / maxM) * 82 + '%"></div></div>').join('') + '</div>' +
@@ -594,7 +610,7 @@
 
   /* ---------------------------------------------------------- data tables */
   function defaultTableState() {
-    return { q: '', status: '', orderType: '', productType: '', transport: '', dateField: 'timestampIso', from: '', to: '', quick: 'all', sort: { key: 'timestampIso', dir: 'desc' }, page: 1, size: 25 };
+    return { q: '', status: '', orderStatus: '', orderType: '', productType: '', transport: '', dateField: 'timestampIso', from: '', to: '', quick: 'all', sort: { key: 'timestampIso', dir: 'desc' }, page: 1, size: 25 };
   }
   function tableState(key) { return S.tables[key] = S.tables[key] || defaultTableState(); }
 
@@ -609,15 +625,18 @@
 
   function columns(key) {
     const cols = [
-      { key: 'orderId', label: 'Order', sort: 'orderId', html: (r) => '<div class="cell-strong">' + esc(r.orderId || '—') + '</div><div class="cell-sub" style="white-space:nowrap">' + esc((r.timestamp || '').substring(0, 10)) + (r.orderType ? ' · ' + esc(titleCase(r.orderType)) : '') + '</div>' },
-      { key: 'customer', label: 'Customer', sort: 'customer', html: (r) => '<div class="cell-strong cell-max" title="' + esc(r.customer) + '">' + esc(r.customer || '—') + '</div><div class="cell-sub cell-max">' + esc([r.city, r.transport].filter(Boolean).join(' · ')) + '</div>' },
+      { key: 'orderId', label: 'Order', sort: 'orderId', html: (r) => '<div class="cell-strong">' + esc(r.orderId || '—') + '</div><div class="cell-sub" style="white-space:nowrap">' + esc((r.timestamp || '').substring(0, 10)) + '</div>' },
+      { key: 'customer', label: 'Customer', sort: 'customer', html: (r) => '<div class="cell-strong cell-max" title="' + esc(r.customer) + '">' + esc(r.customer || '—') + '</div><div class="cell-sub cell-max" title="' + esc(r.transport) + '">' + esc(r.city || r.transport || '') + '</div>' },
       { key: 'item', label: 'Item', sort: 'item', html: (r) => '<div class="item-cell">' + thumb(r, 72) + '<div style="min-width:0"><div class="cell-max" title="' + esc(r.item) + '">' + esc(r.item || '—') + '</div><div class="cell-sub">' + esc(r.productType || '') + '</div></div></div>' },
       { key: 'qty', label: 'Qty', sort: 'qty', n: true, html: (r) => '<b>' + fmtN(r.qty) + '</b>' },
-      { key: 'expectedDate', label: 'Expected', sort: 'expectedDateIso', html: (r) => esc(r.expectedDate || '—') },
-      { key: 'promiseDate', label: 'Promise', sort: 'promiseDateIso', html: (r) => esc(r.promiseDate || '—') + (r.isOverdue ? '<div class="late">' + r.daysLate + 'd late</div>' : isDueSoon(r) ? '<div class="soon">Due soon</div>' : '') },
-      { key: 'status', label: 'Status', sort: 'status', html: (r) => pill(r.status) }
+      { key: 'promiseDate', label: 'Expected / Promise', sort: 'promiseDateIso', html: (r) =>
+        '<div style="white-space:nowrap"><span class="cell-sub">Exp </span>' + esc(r.expectedDate || '—') + '</div>' +
+        '<div style="white-space:nowrap"><span class="cell-sub">Prm </span>' + esc(r.promiseDate || '—') +
+        (r.isOverdue ? ' <span class="late">' + r.daysLate + 'd late</span>' : isDueSoon(r) ? ' <span class="soon">Due soon</span>' : '') + '</div>' },
+      { key: 'orderStatus', label: 'Order Status', sort: 'orderStatus', html: (r) => osPill(r.orderStatus) },
+      { key: 'status', label: 'Final Status', sort: 'status', html: (r) => pill(r.status) }
     ];
-    if (isStaff()) cols.push({ key: 'salesperson', label: 'Salesperson', sort: 'salesperson', html: (r) => esc(titleCase(r.salesperson)) });
+    if (isStaff()) cols.push({ key: 'salesperson', label: 'Salesperson', sort: 'salesperson', html: (r) => '<span style="white-space:nowrap">' + esc(titleCase(r.salesperson)) + '</span>' });
     return cols;
   }
 
@@ -634,6 +653,7 @@
     return scopedRows(key).filter((r) => {
       if (!quick(r)) return false;
       if (st.status && r.status !== st.status) return false;
+      if (st.orderStatus && osLabel(r.orderStatus) !== st.orderStatus) return false;
       if (st.orderType && r.orderType !== st.orderType) return false;
       if (st.productType && r.productType !== st.productType) return false;
       if (st.transport && r.transport !== st.transport) return false;
@@ -668,7 +688,7 @@
   }
 
   function activeFilterCount(st) {
-    return ['status', 'orderType', 'productType', 'transport', 'from', 'to'].filter((k) => st[k]).length;
+    return ['status', 'orderStatus', 'orderType', 'productType', 'transport', 'from', 'to'].filter((k) => st[k]).length;
   }
 
   function renderTable(c, key) {
@@ -691,7 +711,8 @@
         '<div class="chips">' + QUICK.map((q) => '<button class="chip' + (st.quick === q.id ? ' on' : '') + '" data-quick="' + q.id + '">' + esc(q.label) + '<span class="cnt">' + fmtN(qc[q.id]) + '</span></button>').join('') + '</div>' +
         '<button class="btn btn-sm only-mobile-flex" id="t-ftoggle" aria-expanded="false">Filters' + (activeFilterCount(st) ? ' · ' + activeFilterCount(st) : '') + '</button>' +
         '<div class="filters" id="t-filters">' +
-          '<label class="field"><span>Status</span><select data-f="status">' + opt(distinct(base, 'status'), st.status, 'All statuses') + '</select></label>' +
+          '<label class="field"><span>Order status</span><select data-f="orderStatus">' + opt(Array.from(new Set(base.map((r) => osLabel(r.orderStatus)))).sort(), st.orderStatus, 'All order statuses') + '</select></label>' +
+          '<label class="field"><span>Final status</span><select data-f="status">' + opt(distinct(base, 'status'), st.status, 'All final statuses') + '</select></label>' +
           '<label class="field"><span>Order type</span><select data-f="orderType">' + opt(distinct(base, 'orderType'), st.orderType, 'All types') + '</select></label>' +
           '<label class="field"><span>Product type</span><select data-f="productType">' + opt(distinct(base, 'productType'), st.productType, 'All products') + '</select></label>' +
           '<label class="field"><span>Transport</span><select data-f="transport">' + opt(distinct(base, 'transport'), st.transport, 'All methods') + '</select></label>' +
@@ -742,7 +763,7 @@
     }).join('');
     const body = pageRows.map((r) => '<tr data-row="' + r._i + '"' + (r.isOverdue ? ' class="row-overdue"' : '') + '>' + cols.map((col) => '<td' + (col.n ? ' class="n"' : '') + '>' + col.html(r) + '</td>').join('') + '</tr>').join('');
     const cards = pageRows.map((r) => '<div class="ocard" data-row="' + r._i + '"><div class="ocard-top">' + thumb(r, 96) +
-      '<div class="ocard-main"><div class="cell-strong ellipsis">' + esc(r.customer || '—') + '</div><div class="cell-sub ellipsis">' + esc(r.item) + ' · ' + fmtN(r.qty) + ' pcs</div><div style="margin-top:6px">' + pill(r.status) + '</div></div></div>' +
+      '<div class="ocard-main"><div class="cell-strong ellipsis">' + esc(r.customer || '—') + '</div><div class="cell-sub ellipsis">' + esc(r.item) + ' · ' + fmtN(r.qty) + ' pcs</div><div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' + osPill(r.orderStatus) + pill(r.status) + '</div></div></div>' +
       '<div class="ocard-meta"><div><span>Order</span>' + esc(r.orderId) + '</div><div><span>Order date</span>' + esc((r.timestamp || '').substring(0, 10) || '—') + '</div>' +
       '<div><span>Promise</span>' + esc(r.promiseDate || '—') + (r.isOverdue ? ' <span class="late">' + r.daysLate + 'd late</span>' : '') + '</div><div><span>City</span>' + esc(r.city || '—') + '</div>' +
       (isStaff() ? '<div><span>Salesperson</span>' + esc(titleCase(r.salesperson)) + '</div>' : '') + '</div></div>').join('');
@@ -810,7 +831,7 @@
     const host = $('#drawer-host');
     host.innerHTML = '<aside class="drawer" role="dialog" aria-modal="true" aria-label="Order details">' +
       '<div class="drawer-head"><div style="flex:1;min-width:0"><div class="tiny muted">' + esc(src.label) + ' · Sheet row ' + esc(r._row) + '</div><h3 class="ellipsis">' + esc(r.orderId || 'Order') + '</h3>' +
-      '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + pill(r.status) + (r.isOverdue ? '<span class="pill st-critical"><span class="dot"></span>' + r.daysLate + ' days overdue</span>' : '') + '</div></div>' +
+      '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + osPill(r.orderStatus) + pill(r.status) + (r.isOverdue ? '<span class="pill st-critical"><span class="dot"></span>' + r.daysLate + ' days overdue</span>' : '') + '</div></div>' +
       '<button class="icon-btn" data-close aria-label="Close">' + I.x + '</button></div>' +
       '<div class="drawer-body">' +
       '<div class="detail-img">' + (big ? '<img alt="' + esc(r.item) + '" referrerpolicy="no-referrer" src="' + esc(big) + '" onerror="this.replaceWith(document.createTextNode(\'Image unavailable\'))">' : 'No image') + '</div>' +
@@ -824,8 +845,8 @@
         '<div><dt>' + label(3, 'Transport') + '</dt><dd>' + esc(r.transport || '—') + '</dd></div>' +
         '<div><dt>' + label(10, 'Expected Delivery') + '</dt><dd>' + esc(r.expectedDate || '—') + '</dd></div>' +
         '<div><dt>' + label(13, 'Promise Date') + '</dt><dd>' + esc(r.promiseDate || '—') + '</dd></div>' +
-        '<div><dt>' + label(14, 'Order Status') + '</dt><dd>' + esc(r.orderStatus || '—') + '</dd></div>' +
-        '<div><dt>' + label(15, 'Final Status') + '</dt><dd>' + esc(r.finalStatus || '—') + '</dd></div>' +
+        '<div><dt>' + label(14, 'Order Status') + '</dt><dd>' + osPill(r.orderStatus) + '</dd></div>' +
+        '<div><dt>' + label(15, 'Final Status') + '</dt><dd>' + pill(r.status) + '</dd></div>' +
       '</dl>' +
       '<div class="section-title">Customer</div><dl class="dl">' +
         '<div><dt>' + label(4, 'Customer') + '</dt><dd>' + esc(r.customer || '—') + '</dd></div>' +

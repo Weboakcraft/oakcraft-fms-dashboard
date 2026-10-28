@@ -85,11 +85,13 @@ function normaliseRow_(r, statusCell, sheetRow, today) {
   row.finalStatus = str_(statusCell, 80);
   row.salespersonKey = normName_(row.salesperson);
 
-  const status = row.finalStatus || row.orderStatus || 'Not Updated';
+  // Column O (Order Status = approval) and CN/CE (Final Status = fulfilment) are
+  // two different things and are kept separate. Progress/overdue use Final Status.
+  const status = row.finalStatus || 'Not Updated';
   const up = status.toUpperCase();
   row.status = status;
   row.isDone = CONFIG.STATUS_DONE.indexOf(up) >= 0;
-  row.isCancelled = CONFIG.STATUS_CANCELLED.indexOf(up) >= 0;
+  row.isCancelled = CONFIG.STATUS_CANCELLED.indexOf(up) >= 0 || /CANCEL|REJECT/i.test(row.orderStatus);
   const promise = (row.promiseDateIso || '').substring(0, 10);
   row.isOverdue = !!promise && promise < today && !row.isDone && !row.isCancelled;
   row.daysLate = row.isOverdue ? Math.round((Date.parse(today) - Date.parse(promise)) / 86400000) : 0;
